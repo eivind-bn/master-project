@@ -7,6 +7,7 @@ from numpy.typing import NDArray
 from action import Action
 from observation import Observation
 from reward import Reward
+from response import Response
 
 import cv2
 
@@ -45,18 +46,16 @@ class Asteroids:
     def step(self, 
              action:        "Action",
              stochastic:    bool = True,
-             steps:         int = 1) -> Tuple["Observation","Reward"]:
+             steps:         int = 1) -> Response:
         
-        native_rewards: List[int|float] = []
-        images: List[Observation] = []
+        responses = 
 
         for _ in range(steps):
-            reward = 0
             if stochastic:
                 if random() < 0.5:
-                    reward += self._step_spaceship(Action.NOOP)
+                    spaceship, reward = self._step_spaceship(Action.NOOP)
                 else:
-                    reward += self._step_asteroids(Action.NOOP)
+                    asteroids, reward = self._step_asteroids(Action.NOOP)
 
             reward += self._step_spaceship(action)
             reward += self._step_asteroids(action)
@@ -108,7 +107,8 @@ class Asteroids:
 
     def reset(self) -> None:
         self._emulator.reset_game()
-        self.step(Action.NOOP)
+
+    def play()
 
     def play(self,
              fps:           int = 60,
