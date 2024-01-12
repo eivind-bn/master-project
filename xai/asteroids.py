@@ -7,9 +7,9 @@ from numpy.typing import NDArray
 from action import Action
 from observation import Observation
 from reward import Reward
-from response import Response
-
-import cv2
+from xai.step import Step
+from window import Window
+from record import Recorder
 
 class Asteroids:
 
@@ -17,7 +17,6 @@ class Asteroids:
         
         self._emulator: ALEInterface = ALEInterface()
         self._emulator.loadROM(AsteroidsROM)
-        self.reset()
 
         self._angle_steps_to_radians = (
             0.0, 
@@ -46,40 +45,35 @@ class Asteroids:
     def step(self, 
              action:        "Action",
              stochastic:    bool = True,
-             steps:         int = 1) -> Response:
+             steps:         int = 1) -> Step:
         
-        responses = 
+        rewards: List[Reward] = []
 
         for _ in range(steps):
             if stochastic:
                 if random() < 0.5:
-                    spaceship, reward = self._step_spaceship(Action.NOOP)
+                    _, reward = self._step_spaceship(Action.NOOP)
                 else:
-                    asteroids, reward = self._step_asteroids(Action.NOOP)
+                    _, reward = self._step_asteroids(Action.NOOP)
 
-            reward += self._step_spaceship(action)
-            reward += self._step_asteroids(action)
+                rewards.append(reward)
 
-            native_rewards.append(reward)
-            images.append(Observation(
-                spaceship=self.spaceship,
-                asteroids=self.asteroids,
-                spaceship_angle=self.spaceship_angle()
-            ))
+            self.spaceship, reward = self._step_spaceship(action)
+            rewards.append(reward)
+
+            self.asteroids, reward = self._step_asteroids(action)
+            rewards.append(reward)
 
         observation = Observation(
-            spaceship=self.spaceship, 
+            spaceship=self.spaceship,
             asteroids=self.asteroids,
             spaceship_angle=self.spaceship_angle()
             )
         
-        reward = Reward(
-            values=native_rewards,
-            observations=images,
-            actions=[action]*steps
+        return Step(
+            observation=observation,
+            rewards=rewards
             )
-        
-        return observation, reward
     
     def _step_asteroids(self, action: Action) -> Tuple[NDArray[uint8],int]:
         flags = int(self._emulator.getRAM()[57])
@@ -105,10 +99,9 @@ class Asteroids:
         angle_step = self._emulator.getRAM()[60] & 0xf
         return self._angle_steps_to_radians[angle_step]
 
-    def reset(self) -> None:
+    def reset(self) -> Step:
         self._emulator.reset_game()
-
-    def play()
+        return self.step(Action.NOOP)
 
     def play(self,
              fps:           int = 60,
@@ -116,53 +109,25 @@ class Asteroids:
              translate:     bool = False,
              rotate:        bool = False,
              stochastic:    bool = False,
-             step_cb:       Callable[[AsteroidsObservation,AsteroidsReward],None] = lambda *_: None) -> None:
+             show:          bool = False,
+             record_path:   str|None = None) -> None:
         
-        title = "Asteroids"
-
-        def window_visible() -> bool:
-            return cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE) > 0
+        step = self.reset()
         
-        def wait_key() -> str|None:
-            code = cv2.waitKeyEx(1000//fps)
-            if code > -1:
-                return chr(code)
-            else:
-                return None  
+        def key_handler(key: str) -> None:
 
-        try:
-            cv2.namedWindow(title, cv2.WINDOW_NORMAL)
 
-            h,w,_ = self.observation_shape
-            cv2.resizeWindow(title, int(w*scale), int(h*scale))
+        controller = {
+            "w": Action.UP,
+            "a": Action.LEFT,
+            "d": Action.RIGHT,
+            " ": Action.FIRE
+        }
+        with Window(name="Asteroids", enabled=show, fps=fps, scale=scale, key_events=controller) as window:
+            with Recorder(filename=record_path, fps=fps, scale=scale) as recorder:
+                self.reset()
+                while self.running():
+                    observation, reward = self.step()
+                    window()
 
-            while self.running() and window_visible():
-                
-                image = self.render()
 
-                if translate:
-                    image = image.translated()
-
-                if rotate:
-                    image = image.rotated()
-                
-                cv2.imshow(title, image.numpy()[:,:,::-1])
-                
-                key = wait_key()
-
-                match key:
-                    case "q":
-                        break
-                    case "w":
-                        step_cb(image, self.step(AsteroidsAction.UP, stochastic=stochastic))
-                    case "a":
-                        step_cb(image, self.step(AsteroidsAction.LEFT, stochastic=stochastic))
-                    case "d":
-                        step_cb(image, self.step(AsteroidsAction.RIGHT, stochastic=stochastic))
-                    case " ":
-                        step_cb(image, self.step(AsteroidsAction.FIRE, stochastic=stochastic))
-                    case _:
-                        step_cb(image, self.step(AsteroidsAction.NOOP, stochastic=stochastic))
-
-        finally:
-            cv2.destroyWindow(title)
