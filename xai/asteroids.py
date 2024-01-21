@@ -4,12 +4,13 @@ from ale_py.roms import Asteroids as AsteroidsROM
 from random import random
 from numpy import uint8
 from numpy.typing import NDArray
-from action import Action
-from observation import Observation
-from reward import Reward
-from step import Step
-from window import Window
-from record import Recorder
+from .action import Action
+from .observation import Observation
+from .reward import Reward
+from .step import Step
+from .window import Window
+from .record import Recorder
+from .angle import Radians
 
 class Asteroids:
 
@@ -95,9 +96,9 @@ class Asteroids:
     def lives(self) -> int:
         return self._emulator.lives()
     
-    def spaceship_angle(self) -> float:
+    def spaceship_angle(self) -> Radians:
         angle_step = self._emulator.getRAM()[60] & 0xf
-        return self._angle_steps_to_radians[angle_step]
+        return Radians(self._angle_steps_to_radians[angle_step])
 
     def reset(self) -> Step:
         self._emulator.reset_game()

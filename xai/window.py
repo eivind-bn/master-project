@@ -2,6 +2,7 @@ from typing import *
 from numpy.typing import NDArray
 from enum import Enum
 from dataclasses import dataclass
+from .time import Seconds, MilliSeconds
 
 import numpy as np
 import cv2
@@ -67,7 +68,7 @@ class Window:
                  ) -> None:
         
         self._name = name
-        self._delay = 1 if fps is None else int(1e3/fps)
+        self._delay = MilliSeconds(1) if fps is None else Seconds(1)/fps
         self._scale = scale
         self._enabled = enabled
 

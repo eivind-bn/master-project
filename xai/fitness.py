@@ -7,13 +7,12 @@ class Fitness:
                  penalties:   Dict[str,float]|None = None) -> None:
         
         if rewards is None:
-            self._named_rewar
-            ds = {}
+            self._named_rewards: Dict[str,float] = {}
         else:
             self._named_rewards = rewards.copy()
 
         if penalties is None:
-            self._named_penalties = {}
+            self._named_penalties: Dict[str,float] = {}
         else:
             self._named_penalties = penalties.copy()
 

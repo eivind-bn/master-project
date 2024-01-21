@@ -31,7 +31,10 @@ class Unit(ABC, Generic[X]):
     def __mul__(self, operand: int|float) -> Self:
         return self.__class__(self._value*operand)
     
-    def __div__(self, operand: int|float) -> Self:
+    def __pow__(self, operand: int|float) -> Self:
+        return self.__class__(self._value**operand)
+    
+    def __truediv__(self, operand: int|float) -> Self:
         return self.__class__(self._value/operand)
     
     def __floordiv__(self, operand: int|float) -> Self:
@@ -52,7 +55,11 @@ class Unit(ABC, Generic[X]):
         self._value *= operand
         return self
     
-    def __idiv__(self, operand: int|float) -> Self:
+    def __ipow__(self, operand: int|float) -> Self:
+        self._value **= operand
+        return self
+    
+    def __itruediv__(self, operand: int|float) -> Self:
         self._value /= operand
         return self
     
@@ -82,6 +89,9 @@ class Unit(ABC, Generic[X]):
     
     def __ge__(self, operand: X) -> bool:
         return self._value >= self._convert_unit(operand)
+    
+    def __round__(self, number_of_digits: int|None = None) -> Self:
+        return self.__class__(round(self._value, number_of_digits))
     
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self._value})"
