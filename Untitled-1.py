@@ -1,4 +1,9 @@
+# %%
+import torch
+
+# %%
 from typing import *
+from typing import Any
 from numpy.typing import NDArray
 from enum import Enum
 from dataclasses import dataclass
@@ -48,7 +53,59 @@ class MouseEvent:
     x: int
     event: MouseEventType
     flags: MouseEventFlag
+
+EventType = Literal["push", "release", "toggle"]
+
+T = TypeVar("T", covariant=True)
+
+
+
+class KeyEvents(Generic[T], TypedDict, total=False):
+    left_mouse: Callable[[],T]
+
+class KeyboardEventMatcher(Generic[T], TypedDict, total=False):
+    push: Dict[str,Callable[[],T]]|KeyEvents
+    release: Dict[str,Callable[[],T]]
+    toggle: Dict[str,Callable[[],T]]
+
+class MouseButtonMatcher(Generic[T], TypedDict, total=False):
+    left: Callable[[],T]
+    right: Callable[[],T]
+    middle: Callable[[],T]
+
+class MouseMoveEvent(Protocol[T]):
+    def __call__(self, y: int, x: int) -> T:
+        ...
+
+class MouseEventMatcher(Generic[T], TypedDict, total=False):
+    push: MouseButtonMatcher[T]
+    release: MouseButtonMatcher[T]
+    toggle: MouseButtonMatcher[T]
+    move: MouseMoveEvent[T]
+
+class DeviceMatcher(Generic[T], TypedDict, total=False):
+    keyboard: KeyboardEventMatcher[T]
+    mouse: MouseEventMatcher[T]
+
+class Event:
     
+    def __init__(self, mouse_events: Iterable[MouseEvent], key_events: Iterable[int]) -> None:
+        pass
+
+    def match(self, matcher: DeviceMatcher[T]) -> T:
+        return matcher["mouse"]["move"](1,2)
+
+g = Event([],[]).match({
+    "mouse": {
+        "move": lambda a,b: 3,
+        "push": {
+            "left": lambda: 3
+        }
+    }
+})
+
+
+
 class WindowClosed(Exception):
     pass
 
@@ -61,8 +118,6 @@ class Window:
                  resize_mode: ResizeMode                                = "normal",
                  ratio_mode: RatioMode                                  = "keep_ratio",
                  statusbar_mode: StatusBarMode                          = "normal",
-                 key_events: Dict[int|str|None, Callable[[],None]]|None = None,
-                 mouse_event: Callable[[MouseEvent],None]               = lambda _: None,
                  enabled: bool                                          = True
                  ) -> None:
         
@@ -70,13 +125,6 @@ class Window:
         self._delay = 1 if fps is None else int(1e3/fps)
         self._scale = scale
         self._enabled = enabled
-
-        self.key_events = {} if key_events is None else key_events
-        self.mouse_event = mouse_event
-
-        for key in self.key_events.keys():
-            if isinstance(key, str) and len(key) != 1:
-                raise ValueError(f"Event key {key} is not a single character")
 
         resize_flags: Dict[ResizeMode,int] = {
             "normal": cv2.WINDOW_NORMAL,
@@ -100,6 +148,7 @@ class Window:
     def __enter__(self) -> Callable[[NDArray[np.uint8]],None]:
         if self._enabled:
             resized = False
+            mouse_events: List[MouseEvent] = []
             
             def render(image: NDArray[np.uint8]) -> None:
                 nonlocal resized
@@ -132,21 +181,9 @@ class Window:
                 if use_default:
                     self.key_events.get(None, lambda: None)()
 
-            def relay_mouse_event(event: int, 
-                                  x: int, 
-                                  y: int, 
-                                  flags: int, 
-                                  param: int) -> None:
-                self.mouse_event(MouseEvent(
-                    y=y,
-                    x=x,
-                    event=MouseEventType(event),
-                    flags=MouseEventFlag(flags)
-                ))
-
             cv2.namedWindow(self._name, self.window_flag)
             assert hasattr(cv2, "setMouseCallback")
-            cv2.setMouseCallback(self._name, relay_mouse_event)
+            cv2.setMouseCallback(self._name, mouse_events.append)
             return render
         
         return lambda _: None
@@ -155,3 +192,15 @@ class Window:
     def __exit__(self, *_) -> None:
         if self._enabled:
             cv2.destroyWindow(self._name)
+
+
+# %%
+import numpy as np
+with Window("Asteroids") as window:
+    for _ in range(1000):
+        window(np.full((250,250), 127, dtype=np.uint8))
+
+# %%
+
+
+

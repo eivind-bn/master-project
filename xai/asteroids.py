@@ -7,7 +7,7 @@ from numpy.typing import NDArray
 from action import Action
 from observation import Observation
 from reward import Reward
-from xai.step import Step
+from step import Step
 from window import Window
 from record import Recorder
 
@@ -56,13 +56,13 @@ class Asteroids:
                 else:
                     _, reward = self._step_asteroids(Action.NOOP)
 
-                rewards.append(reward)
+                rewards.append(Reward(reward))
 
             self.spaceship, reward = self._step_spaceship(action)
-            rewards.append(reward)
+            rewards.append(Reward(reward))
 
             self.asteroids, reward = self._step_asteroids(action)
-            rewards.append(reward)
+            rewards.append(Reward(reward))
 
         observation = Observation(
             spaceship=self.spaceship,
@@ -114,9 +114,6 @@ class Asteroids:
         
         step = self.reset()
         
-        def key_handler(key: str) -> None:
-
-
         controller = {
             "w": Action.UP,
             "a": Action.LEFT,
@@ -127,7 +124,14 @@ class Asteroids:
             with Recorder(filename=record_path, fps=fps, scale=scale) as recorder:
                 self.reset()
                 while self.running():
-                    observation, reward = self.step()
+                    observation, reward = self.step(Action.NOOP)
                     window()
+                    window().match({
+                        "mouse": {
+                            "click": {
+                                
+                            }
+                        }
+                    })
 
 
