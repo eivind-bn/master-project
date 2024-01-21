@@ -1,5 +1,4 @@
 from typing import *
-from dataclasses import dataclass
 from abc import ABC, abstractmethod
 
 import pickle
