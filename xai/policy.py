@@ -1,47 +1,59 @@
 from typing import *
+from typing import Any
 from torch import Tensor
+from .feed_forward import FeedForward
 
 import torch
 
 Device = Literal["cpu", "cuda", "cuda:0", "cuda:1", "auto"]
 Optimizer = Literal["sgd", "adam"]
 
-class Policy(torch.nn.Module):
+class Policy:
 
     def __init__(self, 
                  input_dim: int,
                  output_dim: int,
-                 device: Device = "auto",
-                 hidden_layers: int|Sequence[int] = 2) -> None:
+                 hidden_layers: int|Sequence[int] = 2,
+                 device: Device = "auto") -> None:
         super().__init__()
 
         if device == "auto":
-            if torch.cuda.is_available():
-                self.device = torch.device("cuda")
-            else:
-                self.device = torch.device("cpu")
+            self.device: Device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
-            self.device = torch.device(device)
+            self.device = device
 
         self._net = torch.nn.Sequential()
 
+        I, O = input_dim, output_dim
+
         if isinstance(hidden_layers, int):
-            for i in range(hidden_layers):
-                self._net += torch.nn.Sequential(
-                    torch.nn.Linear(1,1, device=self.device),
-                    torch.nn.ReLU()
-                )
+            N = hidden_layers + 1
+            layers = [I] + [int(I - ((I - O)*n)/(N)) for n in range(1, hidden_layers+1)] + [output_dim]
         elif isinstance(hidden_layers, Sequence):
-            for i in range(1, len(hidden_layers)):
-                self._net += torch.nn.Sequential(
-                    torch.nn.Linear(hidden_layers[i-1], hidden_layers[i], device=self.device),
-                    torch.nn.ReLU()
-                )
+            layers = [I] + list(hidden_layers) + [O]
         else:
             raise TypeError(f"Argument for layers has incompatible type: {type(hidden_layers)}")
         
-    def forward(self, tensor: Tensor) -> Tensor:
-        return self._net.forward(tensor)
+        for i in range(1, len(layers)-1):
+            self._net += torch.nn.Sequential(
+                torch.nn.Linear(layers[i-1], layers[i], device=self.device),
+                torch.nn.ReLU()
+            )
+
+        self._net += torch.nn.Sequential(torch.nn.Linear(layers[-2], layers[-1], device=self.device))
+        
+    def predict(self, x: Tensor|FeedForward) -> FeedForward:
+        if isinstance(x, Tensor):
+            x = x.to(self.device)
+        else:
+            x = x._output.to(self.device)
+
+        return FeedForward(
+            input=x,
+            network=self._net
+        )
+    def __call__(self, x: Tensor|FeedForward) -> FeedForward:
+        return self.predict(x)
     
     def fit(self, 
             x:              Tensor, 
