@@ -79,3 +79,6 @@ class Policy:
             return policy
         else:
             raise TypeError(f"Unpickled object is not a Policy, but of type: {type(policy)}")
+        
+    def __repr__(self) -> str:
+        return str(self._net)
