@@ -1,5 +1,5 @@
 from typing import *
-from ale_py import ALEInterface
+from ale_py import ALEInterface, LoggerMode
 from ale_py.roms import Asteroids as AsteroidsROM
 from random import random
 from numpy import uint8
@@ -11,6 +11,8 @@ from .step import Step
 from .window import Window
 from .record import Recorder
 from .angle import Radians
+
+ALEInterface.setLoggerMode(LoggerMode.Warning)
 
 class Asteroids:
 
