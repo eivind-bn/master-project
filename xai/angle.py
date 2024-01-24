@@ -28,7 +28,7 @@ class Angle(Unit["Angle"]):
         return Degrees.of(self)
     
     def truncate(self) -> Self:
-        return self.__class__(self.value % self.order)
+        return self.__class__(self._value % self.order)
     
     @classmethod
     def asin(cls, sine: float) -> Self:

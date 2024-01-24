@@ -1,5 +1,6 @@
 from typing import *
 from numpy.typing import NDArray
+from .angle import Angle
 
 import matplotlib.image as im
 import matplotlib.pyplot as plt
@@ -30,10 +31,10 @@ class Observation:
     def __init__(self,
                  spaceship:         NDArray[np.uint8],
                  asteroids:         NDArray[np.uint8],
-                 spaceship_angle:   float|None = None) -> None:
+                 spaceship_angle:   Angle|None = None) -> None:
         self.spaceship = spaceship
         self.asteroids = asteroids
-        self.spaceship_angle: float|None = spaceship_angle
+        self.spaceship_angle = spaceship_angle
 
     def numpy(self) -> NDArray[np.uint8]:
         return self.spaceship | self.asteroids
@@ -74,8 +75,8 @@ class Observation:
     def rotated(self) -> "Observation":
         # TODO: fix rendering issue when called twice
 
-        def rotate_layer(layer: NDArray[np.uint8], radians: float) -> NDArray[np.uint8]:
-            radians = -radians
+        def rotate_layer(layer: NDArray[np.uint8], angle: Angle) -> NDArray[np.uint8]:
+            radians = -angle.radians()
             layer_copy = layer.copy()
             layer_view = layer_copy[_Y_START:_Y_END]
 
@@ -88,8 +89,8 @@ class Observation:
             y_ref = np.concatenate([idy-Y,idy,idy+Y]*3) - y_center
             x_ref = np.concatenate([idx-X]*3 + [idx]*3 + [idx+X]*3) - x_center
 
-            y_rot = np.array(y_ref*np.cos(radians) - x_ref*np.sin(radians) + y_center)
-            x_rot = np.array(y_ref*np.sin(radians) + x_ref*np.cos(radians) + x_center)
+            y_rot = np.array(y_ref*radians.cos() - x_ref*radians.sin() + y_center)
+            x_rot = np.array(y_ref*radians.sin() + x_ref*radians.cos() + x_center)
 
             y_rot_loc = np.array([
                 y_rot - 0.5,
@@ -118,8 +119,8 @@ class Observation:
             return self
         else:
             return Observation(
-                spaceship=rotate_layer(self.spaceship, radians=self.spaceship_angle),
-                asteroids=rotate_layer(self.asteroids, radians=self.spaceship_angle)
+                spaceship=rotate_layer(self.spaceship, angle=self.spaceship_angle),
+                asteroids=rotate_layer(self.asteroids, angle=self.spaceship_angle)
             )
     
     def show(self, cmap: _CMAP|None = None) -> None:

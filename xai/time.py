@@ -27,7 +27,7 @@ class Time(Unit["Time"]):
         return Days.of(self)
     
     @classmethod
-    def mark(cls: Type[Self]) -> Self:
+    def now(cls: Type[Self]) -> Self:
         return cls.of(Seconds(system_time.time()))
     
     def __eq__(self, operand: object) -> bool:

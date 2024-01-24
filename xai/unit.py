@@ -10,10 +10,6 @@ class Unit(ABC, Generic[X]):
         super().__init__()
         self._value = value
 
-    @property
-    def value(self) -> int|float:
-        return self._value
-
     @classmethod
     def of(cls, other: X) -> Self:
         return cls(cls._convert_unit(other))
@@ -42,6 +38,9 @@ class Unit(ABC, Generic[X]):
     
     def __mod__(self, operand: X) -> Self:
         return self.__class__(self._value % self._convert_unit(operand))
+    
+    def __neg__(self) -> Self:
+        return self.__class__(-self._value)
     
     def __iadd__(self, operand: X) -> Self:
         self._value += self._convert_unit(operand)
@@ -93,8 +92,20 @@ class Unit(ABC, Generic[X]):
     def __round__(self, number_of_digits: int|None = None) -> Self:
         return self.__class__(round(self._value, number_of_digits))
     
+    def __int__(self) -> int:
+        return int(self._value)
+    
+    def __float__(self) -> float:
+        return float(self._value)
+    
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self._value})"
+    
+    def int(self) -> int:
+        return int(self._value)
+    
+    def float(self) -> float:
+        return float(self._value)
 
 class Exa(Unit[X]):
     order = 1e18

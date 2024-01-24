@@ -1,8 +1,10 @@
 from typing import *
 from numpy.typing import NDArray
+from numpy import uint8
 from enum import Enum
 from dataclasses import dataclass
 from .time import Seconds, MilliSeconds
+from .events import Events, MouseEvent, MouseEventFlag, MouseEventType
 
 import numpy as np
 import cv2
@@ -11,73 +13,44 @@ ResizeMode = Literal["normal", "autosize"]
 RatioMode = Literal["free_ratio", "keep_ratio"]
 StatusBarMode = Literal["normal", "expanded"]
 
-class MouseEventType(Enum):
-    NONE                        = -1
-    MOUSE_MOVE                  = cv2.EVENT_MOUSEMOVE
-    LEFT_BUTTON_DOWN            = cv2.EVENT_LBUTTONDOWN
-    RIGHT_BUTTON_DOWN           = cv2.EVENT_RBUTTONDOWN
-    MIDDLE_BUTTON_DOWN          = cv2.EVENT_MBUTTONDOWN
-    LEFT_BUTTON_UP              = cv2.EVENT_LBUTTONUP
-    RIGHT_BUTTON_UP             = cv2.EVENT_RBUTTONUP
-    MIDDLE_BUTTON_UP            = cv2.EVENT_MBUTTONUP
-    LEFT_BUTTON_DOUBLE_BLCLK    = cv2.EVENT_LBUTTONDBLCLK
-    RIGHT_BUTTON_DOUBLE_BLCLK   = cv2.EVENT_RBUTTONDBLCLK
-    MIDDLE_BUTTON_DOUBLE_BLCLK  = cv2.EVENT_MBUTTONDBLCLK
-    MOUSE_WHEEL                 = cv2.EVENT_MOUSEWHEEL
-    MOUSEH_WHEEL                = cv2.EVENT_MOUSEHWHEEL
-
-    @classmethod
-    def _missing_(cls, _: Any) -> "MouseEventType":
-        return cls.NONE
-
-class MouseEventFlag(Enum):
-    NONE            = -1
-    LEFT_BUTTON     = cv2.EVENT_FLAG_LBUTTON
-    RIGHT_BUTTON    = cv2.EVENT_FLAG_RBUTTON
-    MIDDLE_BUTTON   = cv2.EVENT_FLAG_MBUTTON
-    CTRL_KEY        = cv2.EVENT_FLAG_CTRLKEY
-    SHIFT_KEY       = cv2.EVENT_FLAG_SHIFTKEY
-    ALT_KEY         = cv2.EVENT_FLAG_ALTKEY
-
-    @classmethod
-    def _missing_(cls, _: Any) -> "MouseEventFlag":
-        return cls.NONE
-
-@dataclass
-class MouseEvent:
-    y: int
-    x: int
-    event: MouseEventType
-    flags: MouseEventFlag
-    
 class WindowClosed(Exception):
     pass
+
+class WindowInterface:
+
+    def __init__(self, 
+                 updater:   Callable[[NDArray[uint8]|None],Events]) -> None:
+        self._updater = updater
+
+    def update(self, image: NDArray[uint8]|None) -> Events:
+        return self._updater(image)
+    
+    def break_window(self) -> NoReturn:
+        raise WindowClosed()
+    
+    def __call__(self, image: NDArray[uint8]|None) -> Events:
+        return self.update(image)
+
 
 class Window:
 
     def __init__(self, 
                  name: str,
-                 fps: float|None                                        = None,
-                 scale: float                                           = 1.0,
-                 resize_mode: ResizeMode                                = "normal",
-                 ratio_mode: RatioMode                                  = "keep_ratio",
-                 statusbar_mode: StatusBarMode                          = "normal",
-                 key_events: Dict[int|str|None, Callable[[],None]]|None = None,
-                 mouse_event: Callable[[MouseEvent],None]               = lambda _: None,
-                 enabled: bool                                          = True
-                 ) -> None:
+                 fps: float|None                = None,
+                 scale: float                   = 1.0,
+                 resize_mode: ResizeMode        = "normal",
+                 ratio_mode: RatioMode          = "keep_ratio",
+                 statusbar_mode: StatusBarMode  = "normal",
+                 flip_color_endianness: bool     = True,
+                 enabled: bool                  = True) -> None:
         
         self._name = name
         self._delay = MilliSeconds(1) if fps is None else Seconds(1)/fps
         self._scale = scale
         self._enabled = enabled
-
-        self.key_events = {} if key_events is None else key_events
-        self.mouse_event = mouse_event
-
-        for key in self.key_events.keys():
-            if isinstance(key, str) and len(key) != 1:
-                raise ValueError(f"Event key {key} is not a single character")
+        self._flip_color_endianness = flip_color_endianness
+        self._resized = False
+        self._mouse_events: List[MouseEvent] = []
 
         resize_flags: Dict[ResizeMode,int] = {
             "normal": cv2.WINDOW_NORMAL,
@@ -97,62 +70,58 @@ class Window:
         self.statusbar_flag = statusbar_flags[statusbar_mode]
 
         self.window_flag = self.resize_flag | self.ratio_flag | self.statusbar_flag
-    
-    def __enter__(self) -> Callable[[NDArray[np.uint8]],None]:
-        if self._enabled:
-            resized = False
-            
-            def render(image: NDArray[np.uint8]) -> None:
-                nonlocal resized
-                if not resized:
-                    resized = True
-                    H,W = image.shape[:2]
-                    cv2.resizeWindow(self._name, int(W*self._scale), int(H*self._scale))
 
-                if cv2.getWindowProperty(self._name, cv2.WND_PROP_VISIBLE) < 1:
-                    raise WindowClosed()
+    def _append_mouse_event(self, event_type: int, x: int, y: int, flags: int, *_) -> None:
+        self._mouse_events.append(MouseEvent(
+            y=y,
+            x=x,
+            event=MouseEventType(event_type),
+            flags=MouseEventFlag(flags)
+        ))
 
-                cv2.imshow(self._name, image)
-                key = cv2.waitKeyEx(self._delay)
+    def _window_visible(self) -> bool:
+        return cv2.getWindowProperty(self._name, cv2.WND_PROP_VISIBLE) > 0
 
-                use_default = True
+    def _update_and_poll_events(self, image: NDArray[np.uint8]|None = None) -> Events:
+        end = MilliSeconds.now() + self._delay
 
-                int_cb = self.key_events.get(key, None)
-                if int_cb is not None:
-                    int_cb()
-                    use_default = False
-
-                try:
-                    chr_cb = self.key_events.get(chr(key), None)
-                    if chr_cb is not None:
-                        chr_cb()
-                        use_default = False
-                except ValueError:
-                    pass
-
-                if use_default:
-                    self.key_events.get(None, lambda: None)()
-
-            def relay_mouse_event(event: int, 
-                                  x: int, 
-                                  y: int, 
-                                  flags: int, 
-                                  param: int) -> None:
-                self.mouse_event(MouseEvent(
-                    y=y,
-                    x=x,
-                    event=MouseEventType(event),
-                    flags=MouseEventFlag(flags)
-                ))
-
-            cv2.namedWindow(self._name, self.window_flag)
-            assert hasattr(cv2, "setMouseCallback")
-            cv2.setMouseCallback(self._name, relay_mouse_event)
-            return render
+        if not self._window_visible():
+            raise WindowClosed()
         
-        return lambda _: None
+        if image is not None:
+            cv2.imshow(self._name, image[:,:,::-1] if self._flip_color_endianness else image)
 
+            if not self._resized:
+                self._resized = True
+                H,W = image.shape[:2]
+                cv2.resizeWindow(self._name, int(W*self._scale), int(H*self._scale))
+
+        key_events: Set[int] = set()
+
+        now = MilliSeconds.now()
+        while now < end:
+            key = cv2.waitKeyEx(max((end - now).int(), 1))
+            if key != -1:
+                key_events.add(key)
+
+            now = MilliSeconds.now()
+
+        mouse_events = self._mouse_events.copy()
+        self._mouse_events.clear()
+
+        return Events(
+            key_events=key_events,
+            mouse_events=mouse_events
+        )
+    
+    def __enter__(self) -> WindowInterface:
+        if self._enabled:
+            cv2.namedWindow(self._name, self.window_flag)
+            cv2.setMouseCallback(self._name, self._append_mouse_event)
+            return WindowInterface(updater=self._update_and_poll_events)
+        
+        return WindowInterface(updater = lambda _: Events(set(),tuple())) 
     
     def __exit__(self, *_) -> None:
-        if self._enabled:
+        if self._enabled and self._window_visible():
             cv2.destroyWindow(self._name)
