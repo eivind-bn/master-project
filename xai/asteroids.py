@@ -8,9 +8,10 @@ from .action import Action
 from .observation import Observation
 from .reward import Reward
 from .step import Step
-from .window import Window
+from .window import Window, WindowClosed
 from .record import Recorder
 from .angle import Radians
+from .box import Box
 
 ALEInterface.setLoggerMode(LoggerMode.Warning)
 
@@ -117,24 +118,34 @@ class Asteroids:
         
         step = self.reset()
         
-        controller = {
-            "w": Action.UP,
-            "a": Action.LEFT,
-            "d": Action.RIGHT,
-            " ": Action.FIRE
-        }
-        with Window(name="Asteroids", enabled=show, fps=fps, scale=scale, key_events=controller) as window:
+        with Window(name="Asteroids", enabled=show, fps=fps, scale=scale) as window:
             with Recorder(filename=record_path, fps=fps, scale=scale) as recorder:
-                self.reset()
-                while self.running():
-                    observation, reward = self.step(Action.NOOP)
-                    window()
-                    window().match({
-                        "mouse": {
-                            "click": {
-                                
-                            }
-                        }
-                    })
+                try:
+                    while self.running():
+                        observation = step.observation
+
+                        if translate:
+                            observation = observation.translated()
+                        if rotate:
+                            observation = observation.rotated()
+
+                        image = observation.numpy()
+                        recorder(image)
+                        step = window(image).match({
+                            "w" : lambda: self.step(Action.UP),
+                            "a" : lambda: self.step(Action.LEFT),
+                            "s" : lambda: self.step(Action.DOWN),
+                            "d" : lambda: self.step(Action.RIGHT),
+                            "wa": lambda: self.step(Action.UP_LEFT),
+                            "ws": lambda: self.step(Action.DOWN_LEFT),
+                            "sd": lambda: self.step(Action.DOWN_RIGHT),
+                            "dw": lambda: self.step(Action.UP_RIGHT),
+                            " " : lambda: self.step(Action.FIRE),
+                            "q" : lambda: window.break_window(),
+                            None: lambda: self.step(Action.NOOP)
+                        })
+                except WindowClosed:
+                    pass
+
 
 
