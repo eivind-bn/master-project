@@ -41,11 +41,12 @@ class Window:
                  resize_mode: ResizeMode        = "normal",
                  ratio_mode: RatioMode          = "keep_ratio",
                  statusbar_mode: StatusBarMode  = "normal",
-                 flip_color_endianness: bool     = True,
+                 flip_color_endianness: bool    = True,
                  enabled: bool                  = True) -> None:
         
         self._name = name
         self._delay = MilliSeconds(1) if fps is None else Seconds(1)/fps
+        self._next_end = MilliSeconds.now() + self._delay
         self._scale = scale
         self._enabled = enabled
         self._flip_color_endianness = flip_color_endianness
@@ -71,7 +72,7 @@ class Window:
 
         self.window_flag = self.resize_flag | self.ratio_flag | self.statusbar_flag
 
-    def _append_mouse_event(self, event_type: int, x: int, y: int, flags: int, *_) -> None:
+    def _append_mouse_event(self, event_type: int, x: int, y: int, flags: int, *_: Any) -> None:
         self._mouse_events.append(MouseEvent(
             y=y,
             x=x,
@@ -83,7 +84,7 @@ class Window:
         return cv2.getWindowProperty(self._name, cv2.WND_PROP_VISIBLE) > 0
 
     def _update_and_poll_events(self, image: NDArray[np.uint8]|None = None) -> Events:
-        end = MilliSeconds.now() + self._delay
+        end = self._next_end
 
         if not self._window_visible():
             raise WindowClosed()
@@ -99,6 +100,11 @@ class Window:
         key_events: Set[int] = set()
 
         now = MilliSeconds.now()
+        key = cv2.waitKeyEx(max((end - now).int(), 1))
+        if key != -1:
+            key_events.add(key)
+
+        now = MilliSeconds.now()
         while now < end:
             key = cv2.waitKeyEx(max((end - now).int(), 1))
             if key != -1:
@@ -106,6 +112,7 @@ class Window:
 
             now = MilliSeconds.now()
 
+        self._next_end = MilliSeconds.now() + self._delay
         mouse_events = self._mouse_events.copy()
         self._mouse_events.clear()
 
@@ -122,6 +129,6 @@ class Window:
         
         return WindowInterface(updater = lambda _: Events(set(),tuple())) 
     
-    def __exit__(self, *_) -> None:
+    def __exit__(self, *_: Any) -> None:
         if self._enabled and self._window_visible():
             cv2.destroyWindow(self._name)

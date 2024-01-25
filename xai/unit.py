@@ -1,7 +1,7 @@
 from typing import *
 from abc import ABC, abstractmethod
 
-X = TypeVar("X", bound="Unit")
+X = TypeVar("X", bound="Unit[Any]")
 
 class Unit(ABC, Generic[X]):
     order = 1e0
@@ -41,34 +41,6 @@ class Unit(ABC, Generic[X]):
     
     def __neg__(self) -> Self:
         return self.__class__(-self._value)
-    
-    def __iadd__(self, operand: X) -> Self:
-        self._value += self._convert_unit(operand)
-        return self
-    
-    def __isub__(self, operand: X) -> Self:
-        self._value -= self._convert_unit(operand)
-        return self
-    
-    def __imul__(self, operand: int|float) -> Self:
-        self._value *= operand
-        return self
-    
-    def __ipow__(self, operand: int|float) -> Self:
-        self._value **= operand
-        return self
-    
-    def __itruediv__(self, operand: int|float) -> Self:
-        self._value /= operand
-        return self
-    
-    def __ifloordiv__(self, operand: int|float) -> Self:
-        self._value //= operand
-        return self
-    
-    def __imod__(self, operand: X) -> Self:
-        self._value %= self._convert_unit(operand)
-        return self
     
     @abstractmethod
     def __eq__(self, operand: object) -> bool:

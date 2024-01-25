@@ -1,6 +1,6 @@
 from typing import *
 from numpy.typing import NDArray
-from skvideo.io import FFmpegWriter
+from skvideo.io import FFmpegWriter # type: ignore[import-untyped]
 
 import cv2
 import numpy as np
@@ -68,6 +68,6 @@ class Recorder:
         
         return lambda _: None
     
-    def __exit__(self, *_) -> None:
+    def __exit__(self, *_: Any) -> None:
         if self._writer is not None:
             self._writer.close()
