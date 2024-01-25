@@ -1,17 +1,16 @@
 from typing import *
 from ale_py import ALEInterface, LoggerMode
-from ale_py.roms import Asteroids as AsteroidsROM
+from ale_py.roms import Asteroids as AsteroidsROM # type: ignore[attr-defined]
 from random import random
 from numpy import uint8
 from numpy.typing import NDArray
-from .action import Action
+from .action import Actions, Action
 from .observation import Observation
 from .reward import Reward
-from .step import Step
 from .window import Window, WindowClosed
 from .record import Recorder
 from .angle import Radians
-from .box import Box
+from .angle_state import AngleStates
 
 ALEInterface.setLoggerMode(LoggerMode.Warning)
 
@@ -21,44 +20,24 @@ class Asteroids:
         
         self._emulator: ALEInterface = ALEInterface()
         self._emulator.loadROM(AsteroidsROM)
-
-        self._angle_steps_to_radians = (
-            0.0, 
-            0.23186466084938862, 
-            0.5880026035475675, 
-            0.9037239459029813, 
-            1.5707963267948966, 
-            2.256525837701183, 
-            2.6909313275091598, 
-            2.936197264400026, 
-            3.141592653589793, 
-            3.2834897081939567, 
-            3.597664649939404, 
-            4.023464592169828, 
-            4.71238898038469, 
-            5.365235611485464, 
-            5.81953769817878, 
-            6.120457932539206
-        )
-        assert (sum(self._angle_steps_to_radians) - 47.24187379318632) < 1e-4
         
         height, width = self._emulator.getScreenDims()
-        self.observation_shape = (height, width, 3)
-        
+        self.observation_shape = cast(Tuple[int,int,int], (height, width, 3))
+        self._angle_states = tuple(AngleStates)
 
     def step(self, 
              action:        "Action",
              stochastic:    bool = True,
-             steps:         int = 1) -> Step:
+             steps:         int = 1) -> Tuple[Observation, Tuple[Reward,...]]:
         
         rewards: List[Reward] = []
 
         for _ in range(steps):
             if stochastic:
                 if random() < 0.5:
-                    _, reward = self._step_spaceship(Action.NOOP)
+                    _, reward = self._step_spaceship(Actions.NOOP)
                 else:
-                    _, reward = self._step_asteroids(Action.NOOP)
+                    _, reward = self._step_asteroids(Actions.NOOP)
 
                 rewards.append(Reward(reward))
 
@@ -74,22 +53,19 @@ class Asteroids:
             spaceship_angle=self.spaceship_angle()
             )
         
-        return Step(
-            observation=observation,
-            rewards=rewards
-            )
+        return observation, tuple(rewards)
     
     def _step_asteroids(self, action: Action) -> Tuple[NDArray[uint8],int]:
         flags = int(self._emulator.getRAM()[57])
         self._emulator.setRAM(57,~1&flags)
-        reward = self._emulator.act(action.value)
+        reward = self._emulator.act(action.ale_id)
         asteroids = self._emulator.getScreenRGB()
         return asteroids, reward
     
     def _step_spaceship(self, action: Action) -> Tuple[NDArray[uint8],int]:
         flags = int(self._emulator.getRAM()[57])
         self._emulator.setRAM(57,1|flags)
-        reward = self._emulator.act(action.value)
+        reward = self._emulator.act(action.ale_id)
         spaceship = self._emulator.getScreenRGB()
         return spaceship, reward
         
@@ -100,12 +76,12 @@ class Asteroids:
         return self._emulator.lives()
     
     def spaceship_angle(self) -> Radians:
-        angle_step = self._emulator.getRAM()[60] & 0xf
-        return Radians(self._angle_steps_to_radians[angle_step])
+        angle_step = int(self._emulator.getRAM()[60] & 0xf)
+        return self._angle_states[angle_step]
 
-    def reset(self) -> Step:
+    def reset(self) -> Tuple[Observation, Tuple[Reward,...]]:
         self._emulator.reset_game()
-        return self.step(Action.NOOP)
+        return self.step(Actions.NOOP)
 
     def play(self,
              fps:           int = 60,
@@ -116,13 +92,19 @@ class Asteroids:
              show:          bool = False,
              record_path:   str|None = None) -> None:
         
-        step = self.reset()
+        observation, rewards = self.reset()
+
+        def step(action: Action) -> Callable[[], Tuple[Observation, Tuple[Reward,...]]]:
+            return lambda: self.step(action, stochastic)
         
         with Window(name="Asteroids", enabled=show, fps=fps, scale=scale) as window:
             with Recorder(filename=record_path, fps=fps, scale=scale) as recorder:
+                cases = {
+                    **{action.key_bind:step(action) for action in Actions},
+                    "q": lambda: window.break_window(),
+                    }
                 try:
                     while self.running():
-                        observation = step.observation
 
                         if translate:
                             observation = observation.translated()
@@ -131,19 +113,7 @@ class Asteroids:
 
                         image = observation.numpy()
                         recorder(image)
-                        step = window(image).match({
-                            "w" : lambda: self.step(Action.UP),
-                            "a" : lambda: self.step(Action.LEFT),
-                            "s" : lambda: self.step(Action.DOWN),
-                            "d" : lambda: self.step(Action.RIGHT),
-                            "wa": lambda: self.step(Action.UP_LEFT),
-                            "ws": lambda: self.step(Action.DOWN_LEFT),
-                            "sd": lambda: self.step(Action.DOWN_RIGHT),
-                            "dw": lambda: self.step(Action.UP_RIGHT),
-                            " " : lambda: self.step(Action.FIRE),
-                            "q" : lambda: window.break_window(),
-                            None: lambda: self.step(Action.NOOP)
-                        })
+                        observation, rewards = window(image).match(cases)
                 except WindowClosed:
                     pass
 

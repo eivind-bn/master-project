@@ -1,29 +1,26 @@
 # %%
+from matplotlib.colors import Colormap
+
 
 from xai.time import *
 from xai.asteroids import *
 from xai.window import *
-
-# %%
-
-a = Seconds.now() + Days(1)
-b = Seconds.now()
-
-a < b, b > a, b < a, a > b
-# %%
-
-
-with Window("Foo", fps=60, scale=2.0) as window:
-    for i in range(400):
-        frame = np.random.randint(low=0, high=255, size=(300,300,3), dtype=np.uint8)
-        s = window(frame).match({
-            "wa": lambda: print("a"),
-            (1,2,3): lambda: None,
-            None: lambda: 2
-        })
-
+from xai.action import *
+from xai.angle import *
 
 # %%
 env = Asteroids()
-env.play(show=True, translate=True, rotate=True)
+env.play(show=True, translate=False, rotate=False, fps=60, stochastic=False)
+# %%
+Actions.NOOP
+# %%
+
+l = list(AngleStates)
+l
+# %%
+
+
+x = Radians(2) + Radians(4)
+x += Radians(2)
+x
 # %%
