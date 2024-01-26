@@ -2,6 +2,7 @@ from typing import *
 from torch import Tensor
 from dataclasses import dataclass
 from torch.nn import Sequential
+from torch.nn.functional import mse_loss, huber_loss, cross_entropy, binary_cross_entropy
 
 import torch
 
@@ -25,6 +26,8 @@ class Choices:
     
     def __repr__(self) -> str:
         return str(self._values)
+    
+LossType = Literal["mse", "huber", "cross_entropy"]
 
 class FeedForward:
 
@@ -32,8 +35,9 @@ class FeedForward:
                  input:     Tensor,
                  network:   Sequential) -> None:
            
+        self._network = network
         self._input = input.requires_grad_(True)
-        self._output: Tensor = network(self._input)
+        self._output: Tensor = self._network(self._input)
         self._input = input.requires_grad_(False)
         self._gradients: Tensor|None = None
 
@@ -75,6 +79,18 @@ class FeedForward:
             self._input.requires_grad = requires_grad
         
         return self._gradients
+    
+    def loss(self, loss: LossType, target: Tensor) -> Tensor:
+        match loss:
+            case "mse":
+                return mse_loss(self._output, target)
+            case "huber":
+                return huber_loss(self._output, target)
+            case "cross_entropy":
+                return cross_entropy(self._output, target)
+    
+    def tensor(self) -> Tensor:
+        return self._output
     
     def __repr__(self) -> str:
         return str(self._output)
