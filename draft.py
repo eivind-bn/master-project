@@ -7,13 +7,14 @@ from xai.asteroids import *
 from xai.window import *
 from xai.action import *
 from xai.angle import *
-from torch.optim import Optimizer, SGD, Adam
 from torch.nn import Sequential, Linear, ReLU
 from torch import tensor, Tensor
-from xai.tensor import *
-from xai.policy import Policy
+from xai.policy import *
+from xai.optimizer import *
 from torchvision.datasets.mnist import MNIST
 import matplotlib.pyplot as plt
+
+import torch
 # %%
 mnist = MNIST(".", download=True)
 mnist.data = mnist.data.float()
@@ -29,17 +30,42 @@ labels
 
 
 # %%
+images = mnist.data
 
-p1 = Policy.new(1,10,lambda o: o.sgd(lr=0.1)),
-p2 = Policy.new(10,1)
-(p1 + p2)(x).mse_loss()
+encoder = ContinuousPolicy.new((28,28),10, hidden_layers=2)
+decoder = ContinuousPolicy.new(10,(28,28), hidden_layers=2)
+
+encoder + decoder
 # %%
 
-plt.imshow(mnist.data[600].cpu().numpy()), f(mnist.data[600].flatten())
+Adam(encoder + decoder).fit(images, images, 5000, 32, verbose=True)
+
 # %%
+image = mnist.data[950]
+
+# %%
+reconstruction = (encoder + decoder)(images).tensor()
+plt.imshow(image.cpu().numpy(), cmap="gray")
+# %%
+plt.imshow(reconstruction.detach().cpu().numpy(), cmap="gray")
+# %%
+
+classifier = DiscretePolicy.new(28*28,10, hidden_layers=3)
+SGD(classifier).fit(images, labels, steps=5000, batch_size=32, verbose=True, lr=0.1)
+
+# %%
+
+classifier(image.flatten())
+
+
+
+# %%
+
 
 
 env = Asteroids()
 env.play(show=True, translate=True, rotate=True, fps=60, stochastic=False)
 # %%
+
+isinstance((1,2,3), Iterable)
 # %%

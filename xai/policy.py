@@ -1,26 +1,30 @@
 from typing import *
-from typing import Any
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from torch import Tensor
-from torch.nn import Sequential, Module, Parameter
-from torch.optim import Optimizer, SGD, Adam
+from typing import Callable
+from torch import Tensor, device
+from torch.nn import Sequential, Parameter, Module
 from .feed_forward import FeedForward
-from .optimizer import OptimizerFactory, Optimizers
 
 import torch
 import copy
+import math
 
 Device = Literal["cpu", "cuda", "cuda:0", "cuda:1", "auto"]
-OptimizerType = Literal["sgd", "adam"]
-LossType = Literal["mse", "huber"]
+Activation = Literal["relu", "sigmoid", "tanh"]
+
+P = TypeVar("P", bound="Policy")
 
 @dataclass(frozen=True)
-class Policy:
-    input_dim:      int
-    output_dim:     int
+class Policy(ABC):
+    input_dim:      Tuple[int,...]
+    output_dim:     Tuple[int,...]
     device:         Device
     network:        Sequential
-    optimizer:      OptimizerFactory
+
+    @abstractmethod
+    def loss_function(self) -> Callable[[Tensor,Tensor],Tensor]:
+        pass
 
     def predict(self, 
                 x:              Tensor|FeedForward, 
@@ -32,13 +36,18 @@ class Policy:
         if move_to_device:
             x = x.to(device=self.device)
 
-        return FeedForward(
-            input=x,
-            network=self.network
-        )
-    
-    def parameters(self) -> Iterator[Parameter]:
-        return self.network.parameters()
+        if len(x.shape) == len(self.input_dim) + 1:
+            return FeedForward(
+                input=x,
+                network=self.network,
+                loss_function=self.loss_function()
+            )
+        else:
+            return FeedForward(
+                input=x,
+                network=self.network,
+                loss_function=self.loss_function()
+            )
             
     def save(self, path: str) -> None:
         torch.save(self, path)
@@ -54,59 +63,79 @@ class Policy:
         else:
             raise TypeError(f"Unpickled object is not a Policy, but of type: {type(policy)}")
         
-    @staticmethod
-    def new(input_dim:      int,
-            output_dim:     int,
-            optimizer:      Callable[[Type[Optimizers]],OptimizerFactory],
+    @classmethod
+    def new(cls,
+            input_dim:      int|Sequence[int],
+            output_dim:     int|Sequence[int],
             hidden_layers:  int|Sequence[int] = 2,
-            device:         Device = "auto") -> "Policy":
+            activation:     Activation|None = "relu",
+            device:         Device = "auto") -> Self:
         
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
+        activations: Dict[Activation,Type[Module]] = {
+            "relu": torch.nn.ReLU,
+            "sigmoid": torch.nn.Sigmoid,
+            "tanh": torch.nn.Tanh
+        }
+
         network = torch.nn.Sequential()
 
-        I, O = input_dim, output_dim
+        if isinstance(input_dim, Sequence):
+            input_dim = tuple(input_dim)
+        else:
+            input_dim = (input_dim,)
 
-        if isinstance(hidden_layers, int):
-            N = hidden_layers + 1
-            layers = [I] + [int(I - ((I - O)*n)/(N)) for n in range(1, hidden_layers+1)] + [output_dim]
-        elif isinstance(hidden_layers, Sequence):
+        if isinstance(output_dim, Sequence):        
+            output_dim = tuple(output_dim)
+        else:
+            output_dim = (output_dim,)
+
+        I = math.prod(input_dim)
+        O = math.prod(output_dim)
+
+        if isinstance(hidden_layers, Sequence):
             layers = [I] + list(hidden_layers) + [O]
         else:
-            raise TypeError(f"Argument for layers has incompatible type: {type(hidden_layers)}")
+            N = hidden_layers + 1
+            layers = [I] + [int(I - ((I - O)*n)/(N)) for n in range(1, N)] + [O]
         
         for i in range(1, len(layers)-1):
-            network += torch.nn.Sequential(
-                torch.nn.Linear(layers[i-1], layers[i], device=device),
-                torch.nn.ReLU()
-            )
+            network.append(torch.nn.Linear(layers[i-1], layers[i], device=device))
+            if activation is not None:
+                network.append(activations[activation]())
 
-        network += torch.nn.Sequential(torch.nn.Linear(layers[-2], layers[-1], device=device))
+        network.append(torch.nn.Linear(layers[-2], layers[-1], device=device))
 
-        return Policy(
+        return cls(
             input_dim=input_dim,
             output_dim=output_dim,
             device=device,
             network=network,
-            optimizer=optimizer(Optimizers)
         )
     
-    def __add__(self, other: "Policy") -> "Policy":
+    def __add__(self, other: P) -> P:
         assert self.output_dim == other.input_dim
-        return Policy(
+        return other.__class__(
             input_dim=self.input_dim,
             output_dim=other.output_dim,
             device=self.device,
             network=self.network + other.network,
-            optimizer=None
         )
     
     def __call__(self, x: Tensor|FeedForward) -> FeedForward:
         return self.predict(x)
     
-    def __iter__(self) -> Iterator[Parameter]:
-        return self.parameters()
-    
     def __repr__(self) -> str:
         return str(self.network)
+
+class ContinuousPolicy(Policy):
+
+    def loss_function(self) -> Callable[[Tensor, Tensor], Tensor]:
+        return torch.nn.functional.mse_loss
+    
+class DiscretePolicy(Policy):
+
+    def loss_function(self) -> Callable[[Tensor, Tensor], Tensor]:
+        return torch.nn.functional.cross_entropy

@@ -1,8 +1,7 @@
 from typing import *
 from torch import Tensor
 from dataclasses import dataclass
-from torch.nn import Sequential
-from torch.nn.functional import mse_loss, huber_loss, cross_entropy, binary_cross_entropy
+from torch.nn import Sequential, Module
 
 import torch
 
@@ -33,8 +32,10 @@ class FeedForward:
 
     def __init__(self, 
                  input:     Tensor,
-                 network:   Sequential) -> None:
+                 network:   Sequential,
+                 loss_function: Callable[[Tensor,Tensor],Tensor]) -> None:
            
+        self._loss_function = loss_function
         self._network = network
         self._input = input.detach().requires_grad_(True)
         self._output: Tensor = self._network(self._input)
@@ -80,14 +81,8 @@ class FeedForward:
         
         return self._gradients
     
-    def loss(self, loss: LossType, target: Tensor) -> Loss:
-        match loss:
-            case "mse":
-                return mse_loss(self._output, target)
-            case "huber":
-                return huber_loss(self._output, target)
-            case "cross_entropy":
-                return cross_entropy(self._output, target)
+    def loss(self, target: Tensor) -> Tensor:
+        return self._loss_function(self._output, target)
     
     def tensor(self) -> Tensor:
         return self._output
