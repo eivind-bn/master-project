@@ -30,9 +30,9 @@ labels
 
 # %%
 
-f = Policy(28*28,10, device="auto")
-f.fit(mnist.data.flatten(start_dim=1), labels, 5000, 32, "adam", optimizer_params={
-})
+p1 = Policy.new(1,10,lambda o: o.sgd(lr=0.1)),
+p2 = Policy.new(10,1)
+(p1 + p2)(x).mse_loss()
 # %%
 
 plt.imshow(mnist.data[600].cpu().numpy()), f(mnist.data[600].flatten())
@@ -40,6 +40,6 @@ plt.imshow(mnist.data[600].cpu().numpy()), f(mnist.data[600].flatten())
 
 
 env = Asteroids()
-env.play(show=True, translate=False, rotate=False, fps=60, stochastic=False)
+env.play(show=True, translate=True, rotate=True, fps=60, stochastic=False)
 # %%
 # %%
