@@ -36,7 +36,7 @@ class FeedForward:
                  network:   Sequential) -> None:
            
         self._network = network
-        self._input = input.requires_grad_(True)
+        self._input = input.detach().requires_grad_(True)
         self._output: Tensor = self._network(self._input)
         self._input = input.requires_grad_(False)
         self._gradients: Tensor|None = None
@@ -80,7 +80,7 @@ class FeedForward:
         
         return self._gradients
     
-    def loss(self, loss: LossType, target: Tensor) -> Tensor:
+    def loss(self, loss: LossType, target: Tensor) -> Loss:
         match loss:
             case "mse":
                 return mse_loss(self._output, target)
