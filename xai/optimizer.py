@@ -1,28 +1,22 @@
 from typing import *
-from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Unpack
 from torch import Tensor
-from torch.nn import Parameter
 from tqdm import tqdm
 from torch.optim import Optimizer as TorchOptimizer
 from .policy import Policy
 
 import torch
 
-class OptimizerParams(TypedDict, total=False):
-    weight_decay:   float
-
-P = TypeVar("P", bound=OptimizerParams)
-
-class Optimizer(Generic[P], ABC):
+class Optimizer(ABC):
+    class Params(TypedDict, total=False):
+        weight_decay:   float
 
     def __init__(self, policy: Policy) -> None:
         self._policy = policy
         self._optimizer: TorchOptimizer|None = None
 
     @abstractmethod
-    def get_optimizer(self, **params: Unpack[P]) -> TorchOptimizer: # type: ignore[misc]
+    def get_optimizer(self, **params: Unpack[Params]) -> TorchOptimizer: # type: ignore[misc]
         pass
 
     def fit(self, 
@@ -50,21 +44,20 @@ class Optimizer(Generic[P], ABC):
                 bar.set_description(f"Loss: {loss:.6f}")
                 bar.update()
 
-class SGDParams(OptimizerParams):
-    lr:             float
-    momentum:       float
-    dampening:      float
-    nesterov:       bool
 
-class SGD(Optimizer[SGDParams]):
+class SGD(Optimizer):
+    class Params(Optimizer.Params):
+        lr:             float
+        momentum:       float
+        dampening:      float
+        nesterov:       bool
           
-    def get_optimizer(self, **params: Unpack[SGDParams]) -> TorchOptimizer: # type: ignore[override]
+    def get_optimizer(self, **params: Unpack[Params]) -> TorchOptimizer: # type: ignore[override]
         if self._optimizer is None:
             self._optimizer = torch.optim.SGD(self._policy.network.parameters(), **params)
         else:
             for param_group in self._optimizer.param_groups:
                 param_group.update(params)
-
         return self._optimizer
     
     def fit(self,  # type: ignore[override]
