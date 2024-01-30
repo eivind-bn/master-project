@@ -5,6 +5,8 @@ from typing import Callable
 from torch import Tensor, device
 from torch.nn import Sequential, Parameter, Module
 from .feed_forward import FeedForward
+from .loss import Loss, LossType, Losses
+from .optimizer_copy import *
 
 import torch
 import copy
@@ -22,32 +24,65 @@ class Policy(ABC):
     device:         Device
     network:        Sequential
 
-    @abstractmethod
-    def loss_function(self) -> Callable[[Tensor,Tensor],Tensor]:
-        pass
+    class SGDParams(TypedDict, total=False):
+        lr:             Required[float]
+        weight_decay:   float
+        momentum:       float
+        dampening:      float
+        nesterov:       bool
 
+    def sgd(self, **params: Unpack[SGDParams]) -> Optimizer:
+        return OptimizerType(torch.optim.SGD)(
+            f=self.predict,
+            params=self.network.parameters(),
+            **params
+        )
+    
+    class AdamParams(TypedDict, total=False):
+        lr:             float|Tensor
+        weight_decay:   float
+        betas:          Tuple[float,float]
+        eps:            float
+        amsgrad:        bool
+        foreach:        bool|None
+        maximize:       bool
+        capturable:     bool
+        differentiable: bool
+        fused:          bool|None
+    
+    def adam(self, **params: Unpack[AdamParams]) -> Optimizer:
+        return OptimizerType(torch.optim.Adam)(
+            f=self.predict,
+            params=self.network.parameters(),
+            **params
+        )
+    
+    @overload
     def predict(self, 
-                x:              Tensor|FeedForward, 
-                move_to_device: bool = False) -> FeedForward:
-        
+                x:              Tensor,
+                *,
+                with_gradients: Literal[False] = False,
+                move_to_device: bool = False) -> Tensor: ...
+    
+    @overload
+    def predict(self, 
+                x:              Tensor,
+                *,
+                with_gradients: Literal[True],
+                move_to_device: bool = False) -> Tuple[Tensor,Tensor]: ...
+    
+    def predict(self, 
+                x:              Tensor,
+                *,
+                with_gradients: bool = False,
+                move_to_device: bool = False) -> Tensor|Tuple[Tensor,Tensor]:
         if isinstance(x, FeedForward):
             x = x._output
 
         if move_to_device:
             x = x.to(device=self.device)
 
-        if len(x.shape) == len(self.input_dim) + 1:
-            return FeedForward(
-                input=x,
-                network=self.network,
-                loss_function=self.loss_function()
-            )
-        else:
-            return FeedForward(
-                input=x,
-                network=self.network,
-                loss_function=self.loss_function()
-            )
+        raise NotImplemented
             
     def save(self, path: str) -> None:
         torch.save(self, path)
@@ -139,3 +174,5 @@ class DiscretePolicy(Policy):
 
     def loss_function(self) -> Callable[[Tensor, Tensor], Tensor]:
         return torch.nn.functional.cross_entropy
+    
+Policy.new(1,2).sgd(lr=0.1).mse_fit()

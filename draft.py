@@ -12,9 +12,23 @@ from torch import tensor, Tensor
 from xai.policy import *
 from xai.optimizer import *
 from torchvision.datasets.mnist import MNIST
+from xai.loss import *
 import matplotlib.pyplot as plt
 
 import torch
+
+# %%
+def foo(arg):
+    print(arg)
+
+for i in range(5000):
+    foo({
+        "i": i,
+        "txt": str(i)
+    })
+
+Losses.by_name("binary_cross_entropy").value(3,target=4,weight=3,size_average=5)
+
 # %%
 mnist = MNIST(".", download=True)
 mnist.data = mnist.data.float()
@@ -28,7 +42,7 @@ labels[torch.arange(0,mnist.data.shape[0]),mnist.targets] = 1.0
 labels = labels.cuda()
 labels
 
-
+(Policy((28,28),10) + Policy(10,(28,28))).sgd().fit()
 # %%
 images = mnist.data
 
@@ -38,7 +52,7 @@ decoder = ContinuousPolicy.new(10,(28,28), hidden_layers=2)
 encoder + decoder
 # %%
 
-Adam(encoder + decoder).fit(images, images, 5000, 32, verbose=True)
+Adam(encoder + decoder).sgd().fit(images, images, 5000, 32, verbose=True)
 
 # %%
 image = mnist.data[950]
@@ -69,3 +83,14 @@ env.play(show=True, translate=True, rotate=True, fps=60, stochastic=False)
 
 isinstance((1,2,3), Iterable)
 # %%
+
+class Foo(NamedTuple):
+    id: int
+    name: str
+
+    def hello(self):
+        return self.id
+    
+
+id,name = Foo(4,"as")
+
