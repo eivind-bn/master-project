@@ -1,19 +1,23 @@
+# %%
+
 from typing import *
 from abc import ABC, abstractmethod
-from typing import Any, Callable
+from typing import Any, Callable, Iterable, Type
 from torch import Tensor
 from torch.nn import Parameter
 from tqdm import tqdm
 from torch.optim import Optimizer as TorchOptimizer
 
+import torch.nn.functional as F
 import torch
+
 
 T = TypeVar("T", bound=TorchOptimizer)
 P = TypeVar("P")
 
-Param = Union[Callable[[],P],P]
+Param = P|Callable[[],P]
 
-class Optimizer(Generic[T], ABC):
+class Optimizer(Generic[T]):
 
     def __init__(self, 
                  optimizer_type:    Type[T], 
@@ -35,6 +39,15 @@ class Optimizer(Generic[T], ABC):
             else:
                 self._param_values[name] = param
 
+    def update_params(self) -> None:
+        for param_group in self._optimizer.param_groups:
+
+            for key,value in self._param_values.items():
+                param_group[key] = value
+
+            for key,callable_value in self._param_callables.items():
+                param_group[key] = callable_value()
+
     def get_optimizer(self) -> T:
         if self._optimizer is None:
             params = self._param_values.copy()
@@ -44,13 +57,7 @@ class Optimizer(Generic[T], ABC):
 
             self._optimizer = self._optimizer_type(self._f_params, **params)
         else:
-            for param_group in self._optimizer.param_groups:
-
-                for key,value in self._param_values.items():
-                    param_group[key] = value
-
-                for key,callable_value in self._param_callables.items():
-                    param_group[key] = callable_value()
+            self.update_params()
 
         return self._optimizer
 
@@ -110,3 +117,33 @@ class Adam(Optimizer[torch.optim.Adam]):
                  f:         Callable[[Tensor], Tensor], 
                  **params:  Unpack[Params]) -> None:
         super().__init__(torch.optim.Adam, f_params, f, **params)
+
+
+# %%
+f = torch.nn.Linear(10,100)
+y_hat: Tensor = f(torch.full((3,10),10,dtype=torch.float32))
+
+
+sgd = Adam(
+    f_params=f.parameters(),
+    f=lambda t: f(t),
+    lr=0.1,
+    nesterov=""
+)
+
+sgd.fit(
+    torch.full((3,10), 100, dtype=torch.float32),
+    torch.full((3,10), 100, dtype=torch.float32),
+    100,
+    2, 
+    loss_criterion=lambda t1,t2: print("Hi")
+    )
+
+# %%
+param = {"lr": 0.2}
+s = torch.optim.SGD(f.parameters(), **param)
+s.register_step_pre_hook(lambda *k: print("Hrllo"))
+s.zero_grad()
+y_hat.sum().backward(retain_graph=True)
+s.step()
+# %%
