@@ -7,16 +7,16 @@ from .policy import Policy
 
 import torch
 
-class Optimizer(ABC):
-    class Params(TypedDict, total=False):
-        weight_decay:   float
+P = TypeVar("P", bound=Dict[str,Any])
+
+class Optimizer(ABC, Generic[P]):
 
     def __init__(self, policy: Policy) -> None:
         self._policy = policy
         self._optimizer: TorchOptimizer|None = None
 
     @abstractmethod
-    def get_optimizer(self, **params: Unpack[Params]) -> TorchOptimizer: # type: ignore[misc]
+    def get_optimizer(self, **params: Unpack[P]) -> TorchOptimizer: # type: ignore[misc]
         pass
 
     def fit(self, 
@@ -44,15 +44,17 @@ class Optimizer(ABC):
                 bar.set_description(f"Loss: {loss:.6f}")
                 bar.update()
 
+class SGDParams(TypedDict, total=False):
+    lr:             float
+    weight_decay:   float
+    momentum:       float
+    dampening:      float
+    nesterov:       bool
 
-class SGD(Optimizer):
-    class Params(Optimizer.Params):
-        lr:             float
-        momentum:       float
-        dampening:      float
-        nesterov:       bool
+class SGD(Optimizer[SGDParams]):
+
           
-    def get_optimizer(self, **params: Unpack[Params]) -> TorchOptimizer: # type: ignore[override]
+    def get_optimizer(self, **params: Unpack[SGDParams]) -> TorchOptimizer: # type: ignore[override]
         if self._optimizer is None:
             self._optimizer = torch.optim.SGD(self._policy.network.parameters(), **params)
         else:
@@ -68,9 +70,10 @@ class SGD(Optimizer):
             verbose:    bool = False, 
             **params:   Unpack[SGDParams]) -> None:
         return super().fit(X, Y, steps, batch_size, verbose=verbose, **params)
-    
-class AdamParams(OptimizerParams):
+
+class AdamParams(TypedDict, total=False):
     lr:                float|Tensor
+    weight_decay:      float
     betas:             Tuple[float,float]
     eps:               float
     amsgrad:           bool
@@ -78,9 +81,10 @@ class AdamParams(OptimizerParams):
     maximize:          bool
     capturable:        bool
     differentiable:    bool
-    fused:             bool|None
+    fused:             bool|None  
 
-class Adam(Optimizer[AdamParams]):
+class Adam(Optimizer):
+
 
     def get_optimizer(self, # type: ignore[override]
                       **params: Unpack[AdamParams]) -> TorchOptimizer:

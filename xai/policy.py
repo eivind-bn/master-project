@@ -5,8 +5,7 @@ from typing import Callable
 from torch import Tensor, device
 from torch.nn import Sequential, Parameter, Module
 from .feed_forward import FeedForward
-from .loss import Loss, LossType, Losses
-from .optimizer_copy import *
+from .optimizer_copy import SGD, Adam
 
 import torch
 import copy
@@ -24,36 +23,17 @@ class Policy(ABC):
     device:         Device
     network:        Sequential
 
-    class SGDParams(TypedDict, total=False):
-        lr:             Required[float]
-        weight_decay:   float
-        momentum:       float
-        dampening:      float
-        nesterov:       bool
-
-    def sgd(self, **params: Unpack[SGDParams]) -> Optimizer:
-        return OptimizerType(torch.optim.SGD)(
+    def sgd(self, **params: Unpack[SGD.Params]) -> SGD:
+        return SGD(
+            f_params=self.network.parameters(),
             f=self.predict,
-            params=self.network.parameters(),
             **params
         )
     
-    class AdamParams(TypedDict, total=False):
-        lr:             float|Tensor
-        weight_decay:   float
-        betas:          Tuple[float,float]
-        eps:            float
-        amsgrad:        bool
-        foreach:        bool|None
-        maximize:       bool
-        capturable:     bool
-        differentiable: bool
-        fused:          bool|None
-    
-    def adam(self, **params: Unpack[AdamParams]) -> Optimizer:
-        return OptimizerType(torch.optim.Adam)(
+    def adam(self, **params: Unpack[Adam.Params]) -> Adam:
+        return Adam(
+            f_params=self.network.parameters(),
             f=self.predict,
-            params=self.network.parameters(),
             **params
         )
     
