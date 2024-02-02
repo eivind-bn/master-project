@@ -1,11 +1,11 @@
 from typing import *
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Any, Callable
 from torch import Tensor
-from torch.nn import Parameter, Module
+from torch.nn import Parameter
 from tqdm import tqdm
 from torch.optim import Optimizer as TorchOptimizer
-from .loss import LossType, LossModule, LossFunction, LossName, LossSelector
+from .loss import LossModule, LossFunction, LossName, LossSelector
 
 import torch
 import inspect

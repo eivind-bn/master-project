@@ -14,21 +14,39 @@ class FeedForward:
         
         self._input = input
         self._output = output
-        self._gradients: Tensor|None = None
-    
-    def gradients(self, to_scalars: Callable[[Tensor],Tensor]) -> Tensor:
-        if self._gradients is None:
-            requires_grad = self._input.requires_grad
-            self._input.requires_grad = True
-            outputs = to_scalars(self._output)
-            self._gradients = torch.autograd.grad(
-                outputs=outputs,
-                inputs=self._input,
-                grad_outputs=torch.ones_like(outputs)
-            )[0]
-            self._input.requires_grad = requires_grad
+
+    def derivatives(self, to_scalars: Callable[[Tensor],Tensor], max_order: int|None = 1) -> Iterator[Tensor]:
+        derivative = self._output
         
-        return self._gradients
+        def next_derivative():
+            nonlocal derivative
+            while True:
+                yield derivative.detach().requires_grad_(False)
+                wrt = to_scalars(derivative)
+                self._input.requires_grad = True
+                derivative = torch.autograd.grad(
+                    outputs=wrt,
+                    inputs=self._input,
+                    grad_outputs=torch.ones_like(wrt),
+                    create_graph=True,
+                    retain_graph=True
+                )[0]
+                self._input.requires_grad = False
+
+        iterator = next_derivative()
+
+        if max_order is None:
+            while True:
+                yield next(iterator)
+        else:
+            for _ in range(max_order+1):
+                yield next(iterator)
+
+    def derivative(self, to_scalars: Callable[[Tensor],Tensor], order: int = 1) -> Tensor:
+        return tuple(self.derivatives(to_scalars, order))[order]
+
+    def gradients(self, to_scalars: Callable[[Tensor],Tensor]) -> Tensor:
+        return self.derivative(to_scalars, order=1)
     
     def tensor(self) -> Tensor:
         return self._output

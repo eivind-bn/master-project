@@ -1,5 +1,4 @@
 from typing import *
-from typing import Any
 from torch import Tensor
 from torch.nn import Module
 
