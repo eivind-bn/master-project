@@ -1,7 +1,6 @@
 from typing import *
 from enum import Enum
 from dataclasses import dataclass
-from .angle import Radians
 
 @dataclass(frozen=True)
 class Action:

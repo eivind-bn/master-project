@@ -1,5 +1,5 @@
 from typing import *
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass
 from typing import Callable
 from torch import Tensor, device
