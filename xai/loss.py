@@ -4,8 +4,10 @@ from torch.nn import Module
 
 import torch
 import warnings
+import copy
+import inspect
 
-LossName = Literal[
+LossName: TypeAlias = Literal[
     "L1Loss",
     "MSELoss",
     "CrossEntropyLoss",
@@ -28,8 +30,8 @@ LossName = Literal[
     #"TripletMarginLoss",
     #"TripletMarginWithDistanceLoss",
 ]
-LossSelector = Callable[[Type["LossModule"]],"LossModule"]
-LossFunction = Callable[[Tensor,Tensor],Tensor]
+LossSelector: TypeAlias = Callable[[Type["LossModule"]],"LossModule"]
+Loss: TypeAlias = LossName|LossSelector|"LossModule"
 
 T = TypeVar("T")
 P = ParamSpec("P")
@@ -44,7 +46,7 @@ class LossType(Generic[P]):
         return LossModule(self.loss_module(*args, **kwargs))
     
 
-class LossModule(Generic[P]):
+class LossModule(torch.nn.Module):
     L1Loss = LossType(torch.nn.L1Loss)
     MSELoss = LossType(torch.nn.MSELoss)
     CrossEntropyLoss = LossType(torch.nn.CrossEntropyLoss)
@@ -67,12 +69,15 @@ class LossModule(Generic[P]):
     #TripletMarginLoss = LossType(torch.nn.TripletMarginLoss)
     #TripletMarginWithDistanceLoss = LossType(torch.nn.TripletMarginWithDistanceLoss)
 
-    def __init__(self, loss_module: Module|Callable[[Tensor,Tensor],Tensor]) -> None:
+    def __init__(self, loss_module: Callable[[Tensor,Tensor],Tensor]) -> None:
         super().__init__()
         self._loss_module = loss_module
 
+    def copy(self) -> Self:
+        return copy.deepcopy(self)
+
     def __call__(self, input: Tensor, target: Tensor) -> Tensor:
-        return cast(Tensor, self._loss_module(input, target))
+        return self._loss_module(input, target)
 
     @classmethod
     def types(cls) -> Iterator[Tuple[str,"LossType"]]:
@@ -82,22 +87,35 @@ class LossModule(Generic[P]):
 
     @overload
     @classmethod
-    def get(cls, loss_name: LossName, *, default: T) -> "LossType"|T: ...
+    def get(cls, loss: Loss) -> "LossModule": ...
 
     @overload
     @classmethod
-    def get(cls, loss_name: LossName) -> "LossType": ...
+    def get(cls, loss: Loss, default: T) -> "LossModule"|T: ...
 
     @classmethod
-    def get(cls, loss_name: LossName, **kwargs: T) -> "LossType"|T:
-        for name,module_type in cls.types():
-            if name == loss_name:
-                return module_type
-        
-        if "default" in kwargs:
-            return kwargs["default"]
+    def get(cls, loss: Loss, default: T|None = None) -> "LossModule"|T:
+        if isinstance(loss, str):
+            for name,module_type in cls.types():
+                if name == loss:
+                    return module_type()
+            
+            if default is not None:
+                return default
+            else:
+                raise KeyError(f"Loss-type: {loss} not found.")
+        elif isinstance(loss, LossModule):
+            return loss
+        elif callable(loss):
+            args = inspect.getfullargspec(loss).args
+            match len(args):
+                case 1:
+                    return cast(LossSelector, loss)(LossModule)
+                case _:
+                    raise TypeError(f"Callable must accept 1 argument, but accepts {len(args)}")
         else:
-            raise KeyError(f"Loss-type: {loss_name} not found.")
+            raise TypeError(f"Incompatible loss criterion: {type(loss)}")
+
 
 # Verify that each loss function accepts two arguments once instantiated.
 for name,module_type in LossModule.types():

@@ -6,13 +6,13 @@ from torch import Tensor, device
 from torch.nn import Sequential, Parameter, Module
 from .feed_forward import FeedForward
 from .optimizer import SGD, Adam
+from .activation import Activation, ActivationModule
 
 import torch
 import copy
 import math
 
 Device = Literal["cpu", "cuda", "cuda:0", "cuda:1", "auto"]
-Activation = Literal["relu", "sigmoid", "tanh"]
 
 P = TypeVar("P", bound="Policy")
 
@@ -89,22 +89,21 @@ class Policy(ABC):
         
     @classmethod
     def new(cls,
-            input_dim:      int|Sequence[int],
-            output_dim:     int|Sequence[int],
-            hidden_layers:  int|Sequence[int] = 2,
-            activation:     Activation|None = "relu",
-            device:         Device = "auto") -> Self:
+            input_dim:          int|Sequence[int],
+            output_dim:         int|Sequence[int],
+            hidden_layers:      int|Sequence[int] = 2,
+            hidden_activation:  Activation|None = "ReLU",
+            output_activation:  Activation|None = None,
+            device:             Device = "auto") -> Self:
         
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        activations: Dict[Activation,Type[Module]] = {
-            "relu": torch.nn.ReLU,
-            "sigmoid": torch.nn.Sigmoid,
-            "tanh": torch.nn.Tanh
-        }
-
-        network = torch.nn.Sequential()
+        if hidden_activation is not None:
+            hidden_activation = ActivationModule.get(hidden_activation)
+        
+        if output_activation is not None:
+            output_activation = ActivationModule.get(output_activation)
 
         if isinstance(input_dim, Sequence):
             input_dim = tuple(input_dim)
@@ -124,13 +123,18 @@ class Policy(ABC):
         else:
             N = hidden_layers + 1
             layers = [I] + [int(I - ((I - O)*n)/(N)) for n in range(1, N)] + [O]
+
+        network = torch.nn.Sequential()
         
         for i in range(1, len(layers)-1):
             network.append(torch.nn.Linear(layers[i-1], layers[i], device=device))
-            if activation is not None:
-                network.append(activations[activation]())
+            if hidden_activation is not None:
+                network.append(hidden_activation.copy())
 
         network.append(torch.nn.Linear(layers[-2], layers[-1], device=device))
+
+        if output_activation is not None:
+            network.append(output_activation.copy())
 
         return cls(
             input_dim=input_dim,

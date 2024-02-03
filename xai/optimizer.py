@@ -5,7 +5,7 @@ from torch import Tensor
 from torch.nn import Parameter
 from tqdm import tqdm
 from torch.optim import Optimizer as TorchOptimizer
-from .loss import LossModule, LossFunction, LossName, LossSelector
+from .loss import LossModule, Loss
 
 import torch
 import inspect
@@ -64,26 +64,11 @@ class Optimizer(ABC):
             Y:              Tensor, 
             steps:          int, 
             batch_size:     int,
-            loss_criterion: LossName|LossSelector|LossFunction|LossModule,
+            loss_criterion: Loss,
             verbose:        bool = False) -> None:
         assert X.shape[0] == Y.shape[0] and 0 < batch_size <= X.shape[0]
 
-        if isinstance(loss_criterion, LossModule):
-            loss_function = loss_criterion
-        elif isinstance(loss_criterion, str):
-            loss_function = LossModule.get(loss_criterion)()
-        elif callable(loss_criterion):
-            args = inspect.getfullargspec(loss_criterion).args
-            match len(args):
-                case 1:
-                    loss_function = cast(LossSelector, loss_criterion)(LossModule)
-                case 2:
-                    loss_function = LossModule(cast(LossFunction, loss_criterion))
-                case _:
-                    raise TypeError(f"Callable must accept either 1 or 2 arguments, but accepts {len(args)}")
-        else:
-            raise TypeError(f"Incompatible loss criterion: {type(loss_criterion)}")
-
+        loss_function = LossModule.get(loss_criterion)
         
         def mini_batch() -> Tuple[Tensor,Tensor]:
             idx = torch.randperm(X.shape[0], device=X.device)[:batch_size]
