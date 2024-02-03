@@ -16,10 +16,9 @@ class FeedForward:
         self._output = output
 
     def derivatives(self, to_scalars: Callable[[Tensor],Tensor], max_order: int|None = 1) -> Iterator[Tensor]:
-        derivative = self._output
         
-        def next_derivative():
-            nonlocal derivative
+        def next_derivative() -> Iterator[Tensor]:
+            derivative = self._output
             while True:
                 yield derivative.detach().requires_grad_(False)
                 wrt = to_scalars(derivative)
