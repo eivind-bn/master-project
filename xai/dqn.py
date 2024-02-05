@@ -81,10 +81,9 @@ class DQN:
                 if len(replay_buffer) > batch_size:
                     states = np.stack([entry[0].numpy() for entry in replay_buffer])
                     old_q = torch.stack([self.Q(entry[0]) for entry in replay_buffer])
-                    new_q = torch.stack([self.Q(entry[3]) for entry in replay_buffer])
-                    reward_sums = torch.tensor([entry[2] for entry in replay_buffer]).reshape((states.shape[0],-1))
                     actions = torch.zeros(size=(states.shape[0],len(self._actions)), dtype=torch.int, device=self._policy.device)
-                    actions[torch.arange(0,states.shape[0]),action.ale_id] = 1.0
+                    new_q = torch.stack([self.Q(entry[3]) for entry in replay_buffer])
+                    reward_sums = torch.tensor([entry[2] for entry in replay_buffer], device=self._policy.device).reshape((states.shape[0],-1))
 
                     target_q = old_q.clone()
                     target_q[:,actions] = old_q[:,actions] + alpha*(reward_sums + gamma*new_q.max(dim=1)[0] - old_q[:,actions])
