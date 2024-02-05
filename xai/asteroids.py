@@ -15,14 +15,11 @@ from .angle_state import AngleStates
 ALEInterface.setLoggerMode(LoggerMode.Warning)
 
 class Asteroids:
+    observation_shape = (210,160,3)
 
     def __init__(self) -> None:
-        
         self._emulator: ALEInterface = ALEInterface()
         self._emulator.loadROM(AsteroidsROM)
-        
-        height, width = self._emulator.getScreenDims()
-        self.observation_shape = cast(Tuple[int,int,int], (height, width, 3))
         self._angle_states = tuple(AngleStates)
 
     def step(self, 

@@ -1,10 +1,13 @@
 from typing import *
 from numpy.typing import NDArray
+from torch import Tensor
 from .angle import Angle
+from .policy import Device
 
 import matplotlib.image as im
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
 _PLAYER_COLOR = (240,128,128)
 _Y_START, _Y_END = 18, 195
@@ -34,9 +37,12 @@ class Observation:
                  spaceship_angle:   Angle|None = None) -> None:
         self.spaceship = spaceship
         self.asteroids = asteroids
+        self.rendering: NDArray[np.uint8]|None = None
         self.spaceship_angle = spaceship_angle
 
     def numpy(self) -> NDArray[np.uint8]:
+        if self.rendering is not None:
+            return self.rendering
         return self.spaceship | self.asteroids
     
     def translated(self, new_center: Tuple[int,int]|None = None) -> "Observation":
