@@ -97,6 +97,12 @@ class ActivationModule(Module):
 
     def __call__(self, input: Tensor) -> Tensor:
         return self._activation_module(input)
+    
+    def __repr__(self) -> str:
+        if isinstance(self._activation_module, Module):
+            return repr(self._activation_module)
+        else:
+            return f"{self.__class__.__name__}()"
 
     @classmethod
     def types(cls) -> Iterator[Tuple[str,"ActivationType"]]:
@@ -134,8 +140,6 @@ class ActivationModule(Module):
                     raise TypeError(f"Callable must accept 1 argument, but accepts {len(args)}")
         else:
             raise TypeError(f"Incompatible activation: {type(activation)}")
-                
-        assert_never(activation)
 
 # Verify that each activation function accepts one arguments once instantiated.
 for name,module_type in ActivationModule.types():

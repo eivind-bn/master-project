@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Callable
 from torch import Tensor, device
 from torch.nn import Sequential, Parameter, Module
+from numpy.typing import NDArray
+from numpy import float32, ndarray
 from .feed_forward import FeedForward
 from .optimizer import SGD, Adam
 from .activation import Activation, ActivationModule
@@ -22,38 +24,51 @@ class Policy(ABC):
     output_dim:     Tuple[int,...]
     device:         Device
     network:        Sequential
+    normalize:      float|None
 
     def sgd(self, 
             set_device: bool = False, 
             **params: Unpack[SGD.Params]) -> SGD:
-        return SGD(
-            trainable_params=self.network.parameters(),
-            forward=lambda tensor: self.predict(tensor, set_device).tensor(),
-            **params
-        )
+        return SGD(policy=self,**params)
     
     def adam(self, 
              set_device: bool = False, 
              **params: Unpack[Adam.Params]) -> Adam:
-        return Adam(
-            trainable_params=self.network.parameters(),
-            forward=lambda tensor: self.predict(tensor, set_device).tensor(),
-            **params
-        )
+        return Adam(policy=self,**params)
     
     def predict(self, 
-                X:          Tensor, 
+                X:          Tensor|ndarray|FeedForward, 
                 set_device: bool = False,
+                normalize:  float|None = None,
                 detach:     bool = True) -> FeedForward:
         
-        if detach:
-            X = X.detach()
+        if isinstance(X, ndarray):
+            X = (torch.from_numpy(X)
+                 .to(device=self.device, dtype=torch.float32))
+            
+        elif isinstance(X, FeedForward):
+            X = X.tensor()
 
-        if set_device:
-            X = X.to(device=self.device)
+            if set_device:
+                X = X.to(device=self.device)
 
-        if X.dtype != torch.float32:
-            X = X.float()
+            if X.dtype != torch.float32:
+                X = X.float()
+
+        else:
+            if detach:
+                X = X.detach()  
+
+            if set_device:
+                X = X.to(device=self.device)
+
+            if X.dtype != torch.float32:
+                X = X.float()
+
+        if normalize is not None:
+            X /= normalize
+        elif self.normalize is not None:
+            X /= self.normalize
 
         X = X.requires_grad_(True)
 
@@ -94,7 +109,8 @@ class Policy(ABC):
             hidden_layers:      int|Sequence[int] = 2,
             hidden_activation:  Activation|None = "ReLU",
             output_activation:  Activation|None = None,
-            device:             Device = "auto") -> Self:
+            device:             Device = "auto",
+            normalize:          float|None = None) -> Self:
         
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -141,6 +157,7 @@ class Policy(ABC):
             output_dim=output_dim,
             device=device,
             network=network,
+            normalize=normalize
         )
     
     def __add__(self, other: P) -> P:
@@ -150,12 +167,20 @@ class Policy(ABC):
             output_dim=other.output_dim,
             device=self.device,
             network=self.network + other.network,
+            normalize=self.normalize
         )
     
     def __call__(self, 
-                 x: Tensor, 
-                 set_device: bool = False) -> FeedForward:
-        return self.predict(x, set_device)
+                 X:             Tensor|NDArray[float32]|FeedForward, 
+                 set_device:    bool = False,
+                 normalize:  float|None = None,
+                 detach:        bool = True) -> FeedForward:
+        return self.predict(
+            X=X,
+            set_device=set_device,
+            normalize=normalize,
+            detach=detach
+        )
     
     def __repr__(self) -> str:
         return str(self.network)
