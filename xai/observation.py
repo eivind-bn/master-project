@@ -38,12 +38,24 @@ class Observation:
         self.spaceship = spaceship
         self.asteroids = asteroids
         self.rendering: NDArray[np.uint8]|None = None
+        self.normalized_rendering: NDArray[np.float32]|None = None
         self.spaceship_angle = spaceship_angle
 
-    def numpy(self) -> NDArray[np.uint8]:
-        if self.rendering is not None:
+    @overload
+    def numpy(self, normalize: Literal[False]) -> NDArray[np.uint8]: ...
+
+    @overload
+    def numpy(self, normalize: Literal[True]) -> NDArray[np.float32]: ...
+
+    def numpy(self, normalize: bool) -> NDArray[np.uint8|np.float32]:
+        if normalize:
+            if self.rendering is None:
+                self.rendering = self.spaceship|self.asteroids
             return self.rendering
-        return self.spaceship | self.asteroids
+        else:
+            if self.normalized_rendering is None:
+                self.normalized_rendering = np.array(self.spaceship|self.asteroids, dtype=np.float32)/255.0
+            return self.normalized_rendering
     
     def translated(self, new_center: Tuple[int,int]|None = None) -> "Observation":
         if new_center is None:
@@ -130,11 +142,11 @@ class Observation:
             )
     
     def show(self, cmap: _CMAP|None = None) -> None:
-        plt.imshow(self.numpy(), cmap=cmap)
+        plt.imshow(self.numpy(normalize=False), cmap=cmap)
         plt.show()
 
     def save(self, filename: str, cmap: _CMAP) -> None:
-        im.imsave(fname=filename, arr=self.numpy(), cmap=cmap)
+        im.imsave(fname=filename, arr=self.numpy(normalize=False), cmap=cmap)
 
     def find_player(self, color: Tuple[int,int,int]|None = None) -> Tuple[int,int]|None:
         if color is None:
