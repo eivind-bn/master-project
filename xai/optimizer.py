@@ -63,18 +63,25 @@ class Optimizer(ABC):
 
     def fit(self, 
             X:              Tensor|ndarray|FeedForward, 
-            Y:              Tensor, 
-            steps:          int, 
+            Y:              Tensor|ndarray|FeedForward, 
+            epochs:         int, 
             batch_size:     int,
             loss_criterion: Loss,
             verbose:        bool = False) -> None:
         
-        if isinstance(X, FeedForward):
-            X = X.tensor()
-        elif isinstance(X, ndarray):
-            X = torch.from_numpy(X).to(device=self._policy.device, dtype=torch.float32)
+        def to_tensor(array: Tensor|ndarray|FeedForward) -> Tensor:
+            if isinstance(array, FeedForward):
+                return array.tensor()
+            elif isinstance(array, ndarray):
+                return torch.from_numpy(array).to(device=self._policy.device, dtype=torch.float32)
+            else:
+                return array
+        
+        X = to_tensor(X)
+        Y = to_tensor(Y)
             
-        assert X.shape[0] == Y.shape[0] and 0 < batch_size <= X.shape[0]
+        assert X.shape[0] == Y.shape[0], f"{X.shape[0]=} differs from {Y.shape[0]=}"
+        assert 0 < batch_size <= X.shape[0], f"{batch_size=} is not between 0 and {X.shape[0]}"
 
         loss_function = LossModule.get(loss_criterion)
 
@@ -85,9 +92,9 @@ class Optimizer(ABC):
             idx = torch.randperm(X.shape[0], device=X.device)[:batch_size]
             return X[idx], Y[idx]
 
-        with tqdm(total=steps, desc="Step:", disable=not verbose) as bar:
-            for step in range(steps):
-                optimizer = self.get_optimizer(step)
+        with tqdm(total=epochs, desc="Step:", disable=not verbose) as bar:
+            for epoch in range(epochs):
+                optimizer = self.get_optimizer(epoch)
                 optimizer.zero_grad()
                 x,y = mini_batch()
                 y_hat = self._policy(x).tensor()

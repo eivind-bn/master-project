@@ -128,5 +128,5 @@ class Window:
         return WindowInterface(updater = lambda _: Events(set(),tuple())) 
     
     def __exit__(self, *_: Any) -> None:
-        if self._enabled and self._window_visible():
+        if self._enabled:
             cv2.destroyWindow(self._name)

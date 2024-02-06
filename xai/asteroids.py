@@ -21,6 +21,7 @@ class Asteroids:
         self._emulator: ALEInterface = ALEInterface()
         self._emulator.loadROM(AsteroidsROM)
         self._angle_states = tuple(AngleStates)
+        self.observation, _ = self.reset()
 
     def step(self, 
              action:        "Action",
@@ -44,13 +45,13 @@ class Asteroids:
             self.asteroids, reward = self._step_asteroids(action)
             rewards.append(Reward(reward))
 
-        observation = Observation(
+        self.observation = Observation(
             spaceship=self.spaceship,
             asteroids=self.asteroids,
             spaceship_angle=self.spaceship_angle()
             )
         
-        return observation, tuple(rewards)
+        return self.observation, tuple(rewards)
     
     def _step_asteroids(self, action: Action) -> Tuple[NDArray[uint8],int]:
         flags = int(self._emulator.getRAM()[57])
