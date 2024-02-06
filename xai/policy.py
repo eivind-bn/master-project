@@ -8,6 +8,7 @@ from numpy.typing import NDArray
 from numpy import float32, ndarray
 from .feed_forward import FeedForward
 from .optimizer import SGD, Adam
+from .fitness import Fitness
 from .activation import Activation, ActivationModule
 
 import torch
@@ -87,6 +88,19 @@ class Policy(ABC):
             input=X,
             output=Y
         )
+    
+    def mutate(self, volatility: float, rate: float|None = None) -> None:
+        for params in self.network.parameters():
+            with torch.no_grad():
+                if rate is None:
+                    params[:] = torch.normal(params, volatility)
+                else:
+                    rands = torch.rand(params.shape, device=params.device)
+                    params[:] = torch.where(rands < rate, torch.normal(params, volatility), params)
+
+    @staticmethod
+    def crossover(policies: Iterable[Tuple["Policy",Fitness]]) -> NoReturn:
+        raise NotImplementedError()
             
     def save(self, path: str) -> None:
         torch.save(self, path)
