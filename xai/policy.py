@@ -25,20 +25,16 @@ class Policy(ABC):
     device:         Device
     network:        Sequential
     normalize:      float|None
+    set_device:     bool
 
-    def sgd(self, 
-            set_device: bool = False, 
-            **params: Unpack[SGD.Params]) -> SGD:
-        return SGD(policy=self,**params)
+    def sgd(self, **params: Unpack[SGD.Params]) -> SGD:
+        return SGD(policy=self, set_device=self.set_device, **params)
     
-    def adam(self, 
-             set_device: bool = False, 
-             **params: Unpack[Adam.Params]) -> Adam:
-        return Adam(policy=self,**params)
+    def adam(self, **params: Unpack[Adam.Params]) -> Adam:
+        return Adam(policy=self, set_device=self.set_device, **params)
     
     def predict(self, 
                 X:          Tensor|ndarray|FeedForward, 
-                set_device: bool = False,
                 normalize:  float|None = None,
                 detach:     bool = True) -> FeedForward:
         
@@ -49,7 +45,7 @@ class Policy(ABC):
         elif isinstance(X, FeedForward):
             X = X.tensor()
 
-            if set_device:
+            if self.set_device:
                 X = X.to(device=self.device)
 
             if X.dtype != torch.float32:
@@ -59,7 +55,7 @@ class Policy(ABC):
             if detach:
                 X = X.detach()  
 
-            if set_device:
+            if self.set_device:
                 X = X.to(device=self.device)
 
             if X.dtype != torch.float32:
@@ -110,7 +106,8 @@ class Policy(ABC):
             hidden_activation:  Activation|None = "ReLU",
             output_activation:  Activation|None = None,
             device:             Device = "auto",
-            normalize:          float|None = None) -> Self:
+            normalize:          float|None = None,
+            set_device:         bool = True) -> Self:
         
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -157,7 +154,8 @@ class Policy(ABC):
             output_dim=output_dim,
             device=device,
             network=network,
-            normalize=normalize
+            normalize=normalize,
+            set_device=set_device
         )
     
     def __add__(self, other: P) -> P:
@@ -167,17 +165,16 @@ class Policy(ABC):
             output_dim=other.output_dim,
             device=self.device,
             network=self.network + other.network,
-            normalize=self.normalize
+            normalize=self.normalize,
+            set_device=self.set_device
         )
     
     def __call__(self, 
                  X:             Tensor|NDArray[float32]|FeedForward, 
-                 set_device:    bool = False,
-                 normalize:  float|None = None,
+                 normalize:     float|None = None,
                  detach:        bool = True) -> FeedForward:
         return self.predict(
             X=X,
-            set_device=set_device,
             normalize=normalize,
             detach=detach
         )
