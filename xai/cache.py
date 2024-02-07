@@ -1,5 +1,6 @@
 from typing import *
 from abc import ABC, abstractmethod
+from .bytes import Bytes
 
 import pickle
 import tempfile
@@ -7,6 +8,10 @@ import tempfile
 T = TypeVar("T")
 
 class Cache(ABC, Generic[T]):
+
+    @abstractmethod
+    def size(self) -> Bytes:
+        pass
 
     @abstractmethod
     def dumped(self) -> "Dump[T]":
@@ -24,6 +29,9 @@ class Cache(ABC, Generic[T]):
     def __exit__(self, *_: Any) -> None:
         pass
 
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({self.size()})"
+
 class Dump(Cache[T]):
 
     def __init__(self, data: T) -> None:
@@ -33,6 +41,10 @@ class Dump(Cache[T]):
         self._data: T|None = None
         self._file = tempfile.TemporaryFile(mode="w+b")
         pickle.dump(data, self._file)
+        self._size = Bytes(self._file.tell())
+
+    def size(self) -> Bytes:
+        return self._size
 
     def dumped(self) -> "Dump[T]":
         with self as data:
@@ -60,6 +72,7 @@ class Dump(Cache[T]):
             self._file.seek(0)
             pickle.dump(self._data, self._file)
             self._file.truncate()
+            self._size = Bytes(self._file.tell())
             self._data = None
 
     def __del__(self) -> None:
@@ -70,6 +83,12 @@ class Load(Cache[T]):
     def __init__(self, data: T) -> None:
         super().__init__()
         self._data = data
+        self._size: Bytes|None = None
+
+    def size(self) -> Bytes:
+        if self._size is None:
+            self._size = Bytes(len(pickle.dumps(self._data)))
+        return self._size
 
     def dumped(self) -> Dump[T]:
         return Dump(self._data)
@@ -78,6 +97,7 @@ class Load(Cache[T]):
         return self
 
     def __enter__(self) -> T:
+        self._size = None
         return self._data
 
     def __exit__(self, *_: Any) -> None:
