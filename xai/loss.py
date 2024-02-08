@@ -1,6 +1,7 @@
 from typing import *
 from torch import Tensor
 from torch.nn import Module
+from .stream import Stream
 
 import torch
 import warnings
@@ -80,10 +81,8 @@ class LossModule(torch.nn.Module):
         return self._loss_module(input, target)
 
     @classmethod
-    def types(cls) -> Iterator[Tuple[str,"LossType"]]:
-        for name,var in vars(cls).items():
-            if isinstance(var, LossType):
-                yield name, var
+    def types(cls) -> Stream[Tuple[str,"LossType"]]:
+        return Stream((name,var) for name,var in vars(cls).items() if isinstance(var, LossType))
 
     @overload
     @classmethod
