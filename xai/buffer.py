@@ -1,16 +1,18 @@
 from typing import *
 from collections import deque
+from typing import Iterator
 
 from .bytes import Memory, Bytes
 from .cache import Cache, Dump, Load
+from .stream import Stream
 
 import random
 
 T = TypeVar("T")
 
-EvictionPolicy = Literal["FIFO", "LIFO", "Random"]
+EvictionPolicy = Literal["FIFO", "Random"]
 
-class Buffer(Generic[T]):
+class Buffer(Generic[T], Stream[T]):
 
     def __init__(self, 
                  eviction_policy:   EvictionPolicy,
@@ -30,9 +32,6 @@ class Buffer(Generic[T]):
             case "FIFO":
                 def evict() -> Cache[T]:
                     return data.popleft()
-            case "LIFO":
-                def evict() -> Cache[T]:     
-                    return data.pop()
             case "Random":
                 def evict() -> Cache[T]:
                     idx = random.randrange(0, len(data))
@@ -77,13 +76,25 @@ class Buffer(Generic[T]):
         else:
             self.entries = tuple()
 
+        super().__init__(self)
+
     def size(self) -> Bytes:
         return sum((entry.size() for entry in self.entries), start=Bytes(0))
     
-    def samples(self, count: int) -> Iterator[T]:
-        for entry in random.choices(self.entries, k=count):
-            with entry as data:
-                yield data
+    def randoms(self, with_replacement: bool) -> Stream[T]:
+        def iterator() -> Iterator[T]:
+            N = len(self.entries)
+            if with_replacement:
+                while True:
+                    idx = random.randrange(0,N)
+                    yield self[idx]
+            else:
+                indices = list(range(0,N))
+                while indices:
+                    idx = random.randrange(0,len(indices))
+                    yield self[indices.pop(idx)]
+
+        return Stream(iterator())
 
     def appended(self, data: Cache[T]|T) -> "Buffer[T]":
         return self.extended((data,))
@@ -127,4 +138,9 @@ class Buffer(Generic[T]):
             capacity = (size / self._max_memory.megabytes().float())*100
             return f"{cls_name}({use_ram=}, {entries=}, {size=:.2f}MB, {capacity=:.2f}%)"
         return f"{cls_name}({use_ram=}, {entries=}, {size=:.2f}MB)"
+    
+    def __iter__(self) -> Iterator[T]:
+        for entry in self.entries:
+            with entry as data:
+                yield data
 

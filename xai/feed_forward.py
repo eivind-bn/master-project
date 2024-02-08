@@ -2,6 +2,7 @@ from typing import *
 from torch import Tensor
 from numpy.typing import NDArray
 from numpy import float32
+from .stream import Stream
 
 import torch
 import matplotlib.pyplot as plt
@@ -15,7 +16,7 @@ class FeedForward:
         self._input = input
         self._output = output
 
-    def derivatives(self, to_scalars: Callable[[Tensor],Tensor], max_order: int|None = 1) -> Iterator[Tensor]:
+    def derivatives(self, to_scalars: Callable[[Tensor],Tensor], max_order: int|None = 1) -> Stream[Tensor]:
         
         def next_derivative() -> Iterator[Tensor]:
             derivative = self._output
@@ -32,14 +33,10 @@ class FeedForward:
                 )[0]
                 self._input.requires_grad = False
 
-        iterator = next_derivative()
-
         if max_order is None:
-            while True:
-                yield next(iterator)
+            return Stream(next_derivative())
         else:
-            for _ in range(max_order+1):
-                yield next(iterator)
+            return Stream(next_derivative()).take(max_order+1)
 
     def derivative(self, to_scalars: Callable[[Tensor],Tensor], order: int = 1) -> Tensor:
         return tuple(self.derivatives(to_scalars, order))[order]
