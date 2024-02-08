@@ -1,0 +1,130 @@
+from typing import *
+from collections import deque
+
+from .bytes import Memory, Bytes
+from .cache import Cache, Dump, Load
+
+import random
+
+T = TypeVar("T")
+
+EvictionPolicy = Literal["FIFO", "LIFO", "Random"]
+
+class Buffer(Generic[T]):
+
+    def __init__(self, 
+                 eviction_policy:   EvictionPolicy,
+                 entries:           Iterable[Cache[T]|T]|None = None,
+                 max_entries:       int|None = None, 
+                 max_memory:        Memory|None = None,
+                 use_ram:           bool = False) -> None:
+        self._eviction_policy = eviction_policy
+        self._max_entries = max_entries
+        self._max_memory = max_memory
+        self._use_ram = use_ram
+
+        used_memory = Bytes(0)
+        data: Deque[Cache[T]] = deque(maxlen=max_entries)
+
+        match self._eviction_policy:
+            case "FIFO":
+                def evict() -> Cache[T]:
+                    return data.popleft()
+            case "LIFO":
+                def evict() -> Cache[T]:     
+                    return data.pop()
+            case "Random":
+                def evict() -> Cache[T]:
+                    idx = random.randrange(0, len(data))
+                    cache = data[idx]
+                    del data[idx]
+                    return cache
+            case _:
+                assert_never(eviction_policy)
+
+        def append_with_capacity_check(cache: Cache[T]) -> None:
+            nonlocal used_memory
+            if self._max_memory is not None:
+                new_size = used_memory + cache.size()
+                if new_size < self._max_memory:
+                    data.append(cache)
+                else:
+                    while new_size > self._max_memory:
+                        new_size -= evict().size()
+
+                    data.append(cache)
+
+                used_memory = new_size
+
+            else:
+                data.append(cache)
+                    
+        if entries is not None:
+            if use_ram:
+                for entry in entries:
+                    if isinstance(entry, Cache):
+                        append_with_capacity_check(entry.loaded())
+                    else:
+                        append_with_capacity_check(Load(entry))
+            else:
+                for entry in entries:
+                    if isinstance(entry, Cache):
+                        append_with_capacity_check(entry.dumped())
+                    else:
+                        append_with_capacity_check(Dump(entry))
+                        
+            self.entries: Tuple[Cache[T],...] = tuple(data)
+        else:
+            self.entries = tuple()
+
+    def size(self) -> Bytes:
+        return sum((entry.size() for entry in self.entries), start=Bytes(0))
+    
+    def samples(self, count: int) -> Iterator[T]:
+        for entry in random.choices(self.entries, k=count):
+            with entry as data:
+                yield data
+
+    def appended(self, data: Cache[T]|T) -> "Buffer[T]":
+        return self.extended((data,))
+    
+    def extended(self, other: Iterable[Cache[T]|T]) -> "Buffer[T]":
+        return Buffer(
+            eviction_policy=self._eviction_policy,
+            entries=self.entries + tuple(other),
+            max_entries=self._max_entries,
+            max_memory=self._max_memory,
+            use_ram=self._use_ram,
+            )
+
+    def __add__(self, other: Iterable[Cache[T]|T]) -> "Buffer[T]":
+        return self.extended(other)
+    
+    @overload
+    def __getitem__(self, loc: SupportsIndex) -> T: ...
+
+    @overload
+    def __getitem__(self, loc: slice) -> Tuple[T,...]: ...
+
+    def __getitem__(self, loc: SupportsIndex|slice) -> T|Tuple[T,...]:
+        if isinstance(loc, SupportsIndex):
+            with self.entries[loc] as data:
+                return data
+        else:
+            def load() -> Iterator[T]:
+                for entry in self.entries[loc]:
+                    with entry as data:
+                        yield data
+
+            return tuple(load())
+        
+    def __repr__(self) -> str:
+        cls_name = self.__class__.__name__
+        use_ram = self._use_ram
+        entries = len(self.entries)
+        size = self.size().megabytes().float()
+        if self._max_memory:
+            capacity = (size / self._max_memory.megabytes().float())*100
+            return f"{cls_name}({use_ram=}, {entries=}, {size=:.2f}MB, {capacity=:.2f}%)"
+        return f"{cls_name}({use_ram=}, {entries=}, {size=:.2f}MB)"
+

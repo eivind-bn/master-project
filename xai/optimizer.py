@@ -8,6 +8,7 @@ from tqdm import tqdm
 from torch.optim import Optimizer as TorchOptimizer
 from .loss import LossModule, Loss
 from .feed_forward import FeedForward
+from .stats import TrainStats
 
 import torch
 
@@ -27,11 +28,13 @@ class Optimizer(ABC):
     def __init__(self, 
                  optimizer_type:    Type[TorchOptimizer], 
                  policy:            "Policy",
+                 set_device:        bool,
                  **hyperparameters: Any) -> None:
         
         self._optimizer_type = optimizer_type
         self._optimizer: TorchOptimizer|None = None
         self._policy = policy
+        self._set_device = set_device
 
         self._param_values: Dict[str,Any] = {}
         self._param_callables: Dict[str,ParamCall[Any,Any]] = {}
@@ -67,7 +70,8 @@ class Optimizer(ABC):
             epochs:         int, 
             batch_size:     int,
             loss_criterion: Loss,
-            verbose:        bool = False) -> None:
+            verbose:        bool = False,
+            info:           str|None = None) -> TrainStats:
         
         def to_tensor(array: Tensor|ndarray|FeedForward) -> Tensor:
             if isinstance(array, FeedForward):
@@ -79,11 +83,15 @@ class Optimizer(ABC):
         
         X = to_tensor(X)
         Y = to_tensor(Y)
+
+        if self._set_device:
+            Y = Y.to(device=self._policy.device)
             
         assert X.shape[0] == Y.shape[0], f"{X.shape[0]=} differs from {Y.shape[0]=}"
         assert 0 < batch_size <= X.shape[0], f"{batch_size=} is not between 0 and {X.shape[0]}"
 
         loss_function = LossModule.get(loss_criterion)
+        losses: List[float] = []
 
         X = X.detach()
         Y = Y.detach()
@@ -99,10 +107,17 @@ class Optimizer(ABC):
                 x,y = mini_batch()
                 y_hat = self._policy(x).tensor()
                 loss: Tensor = loss_function(y_hat, y)
+                losses.append(float(loss.item()))
                 loss.backward()
                 optimizer.step()
                 bar.set_description(f"Loss: {loss:.6f}")
                 bar.update()
+
+        return TrainStats(
+            batch_size=batch_size,
+            losses=tuple(losses),
+            info=info
+        )
 
 class SGD(Optimizer):
     class Params(TypedDict, total=False):
@@ -114,8 +129,9 @@ class SGD(Optimizer):
 
     def __init__(self, 
                  policy:            "Policy", 
+                 set_device:        bool,
                  **params:          Unpack[Params]) -> None:
-        super().__init__(torch.optim.SGD, policy, **params)
+        super().__init__(torch.optim.SGD, policy, set_device, **params)
 
 class Adam(Optimizer):
     class Params(TypedDict, total=False):
@@ -132,5 +148,6 @@ class Adam(Optimizer):
 
     def __init__(self, 
                  policy:            "Policy", 
+                 set_device:        bool,
                  **params:          Unpack[Params]) -> None:
-        super().__init__(torch.optim.Adam, policy, **params)
+        super().__init__(torch.optim.Adam, policy, set_device, **params)
