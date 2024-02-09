@@ -1,6 +1,7 @@
 from typing import *
 from collections import deque
 from typing import Iterator
+from tqdm import tqdm
 
 from .bytes import Memory, Bytes
 from .cache import Cache, Dump, Load
@@ -10,20 +11,21 @@ import random
 
 T = TypeVar("T")
 
-EvictionPolicy = Literal["FIFO", "Random"]
+EvictionPolicy = Literal["FIFO", "Random", "Reject"]
 
-class Buffer(Generic[T], Stream[T]):
+class Buffer(Generic[T], Sequence[T], Stream[T]):
 
     def __init__(self, 
+                 entries:           Iterable[Cache[T]|T],
                  eviction_policy:   EvictionPolicy,
-                 entries:           Iterable[Cache[T]|T]|None = None,
+                 use_ram:           bool,
+                 max_memory:        Memory|None,
                  max_entries:       int|None = None, 
-                 max_memory:        Memory|None = None,
-                 use_ram:           bool = False) -> None:
+                 verbose:           bool = False) -> None:
         self._eviction_policy = eviction_policy
-        self._max_entries = max_entries
-        self._max_memory = max_memory
         self._use_ram = use_ram
+        self._max_memory = max_memory
+        self._max_entries = max_entries
 
         used_memory = Bytes(0)
         data: Deque[Cache[T]] = deque(maxlen=max_entries)
@@ -38,6 +40,9 @@ class Buffer(Generic[T], Stream[T]):
                     cache = data[idx]
                     del data[idx]
                     return cache
+            case "Reject":
+                def evict() -> Cache[T]:
+                    raise StopIteration
             case _:
                 assert_never(eviction_policy)
 
@@ -57,29 +62,48 @@ class Buffer(Generic[T], Stream[T]):
 
             else:
                 data.append(cache)
-                    
-        if entries is not None:
-            if use_ram:
-                for entry in entries:
-                    if isinstance(entry, Cache):
-                        append_with_capacity_check(entry.loaded())
-                    else:
-                        append_with_capacity_check(Load(entry))
-            else:
-                for entry in entries:
-                    if isinstance(entry, Cache):
-                        append_with_capacity_check(entry.dumped())
-                    else:
-                        append_with_capacity_check(Dump(entry))
-                        
-            self.entries: Tuple[Cache[T],...] = tuple(data)
-        else:
-            self.entries = tuple()
 
+        def get_desc() -> str:
+            loc = "RAM" if use_ram else "Disk"
+            used_gigs = used_memory.gigabytes().float()
+            if max_memory is not None:
+                max_gigs = max_memory.gigabytes().float()
+                return f"{loc} used: {used_gigs:.2f}/{max_gigs:.2f}GB"
+            else:
+                return f"{loc} used: {used_gigs:.2f}GB"
+
+        try:  
+            if use_ram:
+                with tqdm(disable=not verbose) as bar:
+                    for entry in entries:
+                        if isinstance(entry, Cache):
+                            append_with_capacity_check(entry.loaded())
+                        else:
+                            append_with_capacity_check(Load(entry))
+                            
+                        bar.set_description(get_desc())
+                        bar.update()
+            else:
+                with tqdm(disable=not verbose) as bar:
+                    for entry in entries:
+                        if isinstance(entry, Cache):
+                            append_with_capacity_check(entry.dumped())
+                        else:
+                            append_with_capacity_check(Dump(entry))
+                        
+                        bar.set_description(get_desc())
+                        bar.update()
+        except StopIteration:
+            pass
+
+        self.entries: Tuple[Cache[T],...] = tuple(data)
         super().__init__(self)
 
     def size(self) -> Bytes:
         return sum((entry.size() for entry in self.entries), start=Bytes(0))
+    
+    def length(self) -> int:
+        return len(self.entries)
     
     def randoms(self, with_replacement: bool) -> Stream[T]:
         def iterator() -> Iterator[T]:
@@ -128,6 +152,9 @@ class Buffer(Generic[T], Stream[T]):
                         yield data
 
             return tuple(load())
+        
+    def __len__(self) -> int:
+        return self.length()
         
     def __repr__(self) -> str:
         cls_name = self.__class__.__name__
