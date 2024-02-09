@@ -7,7 +7,7 @@ from torch.nn import Sequential, Parameter, Module
 from numpy.typing import NDArray
 from numpy import float32, ndarray
 from .feed_forward import FeedForward
-from .optimizer import SGD, Adam
+from .optimizer import SGD, Adam, RMSprop
 from .fitness import Fitness
 from .activation import Activation, ActivationModule
 
@@ -33,6 +33,9 @@ class Policy(ABC):
     
     def adam(self, **params: Unpack[Adam.Params]) -> Adam:
         return Adam(policy=self, set_device=self.set_device, **params)
+    
+    def rms_prop(self, **params: Unpack[RMSprop.Params]) -> RMSprop:
+        return RMSprop(policy=self, set_device=self.set_device, **params)
     
     def predict(self, 
                 X:          Tensor|ndarray|FeedForward, 

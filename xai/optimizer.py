@@ -1,6 +1,6 @@
 from typing import *
 from abc import ABC
-from typing import Any, Callable
+from typing import Any, Callable, Type
 from torch import Tensor
 from torch.nn import Parameter
 from numpy import ndarray
@@ -65,40 +65,42 @@ class Optimizer(ABC):
         return self._optimizer
 
     def fit(self, 
-            X:              Tensor|ndarray|FeedForward, 
-            Y:              Tensor|ndarray|FeedForward, 
+            X:              Tensor|ndarray|FeedForward|Sequence[Tensor], 
+            Y:              Tensor|ndarray|FeedForward|Sequence[Tensor], 
             epochs:         int, 
             batch_size:     int,
             loss_criterion: Loss,
             verbose:        bool = False,
             info:           str|None = None) -> TrainStats:
         
-        def to_tensor(array: Tensor|ndarray|FeedForward) -> Tensor:
+        def get_index_access_function(array: Tensor|ndarray|FeedForward|Sequence[Tensor]) -> Tuple[int, Callable[[Tensor],Tensor]]:
             if isinstance(array, FeedForward):
-                return array.tensor()
+                tensor = array.tensor().to(device=self._policy.device, dtype=torch.float32)
+                return tensor.shape[0], lambda indices: tensor[indices]
             elif isinstance(array, ndarray):
-                return torch.from_numpy(array).to(device=self._policy.device, dtype=torch.float32)
+                tensor = torch.from_numpy(array).to(device=self._policy.device, dtype=torch.float32)
+                return tensor.shape[0], lambda indices: tensor[indices]
+            elif isinstance(array, Tensor):
+                tensor = array.to(device=self._policy.device, dtype=torch.float32)
+                return array.shape[0], lambda indices: array[indices]
             else:
-                return array
+                def access(indices: Tensor) -> Tensor:
+                    indices_list: List[int] = indices.tolist()
+                    return torch.stack([array[index] for index in indices_list]).to(device=self._policy.device, dtype=torch.float32)
+                return len(array), access
         
-        X = to_tensor(X)
-        Y = to_tensor(Y)
-
-        if self._set_device:
-            Y = Y.to(device=self._policy.device)
+        X_len, get_X = get_index_access_function(X)
+        Y_len, get_Y = get_index_access_function(Y)
             
-        assert X.shape[0] == Y.shape[0], f"{X.shape[0]=} differs from {Y.shape[0]=}"
-        assert 0 < batch_size <= X.shape[0], f"{batch_size=} is not between 0 and {X.shape[0]}"
+        assert X_len == Y_len, f"{X_len=} differs from {Y_len=}"
+        assert 0 < batch_size <= X_len, f"{batch_size=} is not between 0 and {X_len}"
 
         loss_function = LossModule.get(loss_criterion)
         losses: List[float] = []
-
-        X = X.detach()
-        Y = Y.detach()
         
         def mini_batch() -> Tuple[Tensor,Tensor]:
-            idx = torch.randperm(X.shape[0], device=X.device)[:batch_size]
-            return X[idx], Y[idx]
+            idx = torch.randperm(X_len)[:batch_size]
+            return get_X(idx), get_Y(idx)
 
         with tqdm(total=epochs, desc="Step:", disable=not verbose) as bar:
             for epoch in range(epochs):
@@ -147,7 +149,22 @@ class Adam(Optimizer):
         fused:          Param[bool|None,"Adam.Params"]
 
     def __init__(self, 
-                 policy:            "Policy", 
-                 set_device:        bool,
-                 **params:          Unpack[Params]) -> None:
+                 policy:        "Policy", 
+                 set_device:    bool,
+                 **params:      Unpack[Params]) -> None:
         super().__init__(torch.optim.Adam, policy, set_device, **params)
+
+class RMSprop(Optimizer):
+    class Params(TypedDict, total=False):
+        lr:             Param[float, "RMSprop.Params"]
+        alpha:          Param[float, "RMSprop.Params"]
+        eps:            Param[float, "RMSprop.Params"]
+        weight_decay:   Param[float, "RMSprop.Params"]
+        momentum:       Param[float, "RMSprop.Params"]
+        centered:       Param[bool, "RMSprop.Params"]
+
+    def __init__(self, 
+                 policy:        "Policy", 
+                 set_device:    bool, 
+                 **params:      Unpack[Params]) -> None:
+        super().__init__(torch.optim.RMSprop, policy, set_device, **params)
