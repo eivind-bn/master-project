@@ -6,6 +6,7 @@ from .stream import Stream
 
 import torch
 import matplotlib.pyplot as plt
+import shap
 
 class FeedForward:
 
@@ -43,6 +44,15 @@ class FeedForward:
 
     def gradients(self, to_scalars: Callable[[Tensor],Tensor]) -> Tensor:
         return self.derivative(to_scalars, order=1)
+    
+    def saliency(self, to_scalars: Callable[[Tensor],Tensor], order = 1) -> Tensor:
+        derivate = self.derivative(to_scalars=to_scalars, order=order)
+        magnitudes = derivate.abs()
+        maximum = magnitudes.max()
+        if maximum.item() > 0:
+            return magnitudes / maximum
+        else:
+            return magnitudes
     
     def tensor(self) -> Tensor:
         return self._output
