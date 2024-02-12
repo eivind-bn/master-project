@@ -75,7 +75,7 @@ class Optimizer(ABC):
         
         def get_index_access_function(array: Tensor|ndarray|FeedForward|Sequence[Tensor]) -> Tuple[int, Callable[[Tensor],Tensor]]:
             if isinstance(array, FeedForward):
-                tensor = array.tensor().to(device=self._policy.device, dtype=torch.float32)
+                tensor = array.tensor(True).to(device=self._policy.device, dtype=torch.float32)
                 return tensor.shape[0], lambda indices: tensor[indices]
             elif isinstance(array, ndarray):
                 tensor = torch.from_numpy(array).to(device=self._policy.device, dtype=torch.float32)
@@ -107,7 +107,7 @@ class Optimizer(ABC):
                 optimizer = self.get_optimizer(epoch)
                 optimizer.zero_grad()
                 x,y = mini_batch()
-                y_hat = self._policy(x).tensor()
+                y_hat = self._policy(x).tensor(False)
                 loss: Tensor = loss_function(y_hat, y)
                 losses.append(float(loss.item()))
                 loss.backward()

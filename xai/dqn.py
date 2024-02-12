@@ -15,14 +15,16 @@ from .reward import Reward
 from .feed_forward import FeedForward
 from .step import Step
 from .optimizer import Adam
+from .agent import Agent
 
 import torch
 import random
 import numpy as np
 
-class DQN:
+class DQN(Agent):
 
     def __init__(self, translate: bool, rotate: bool) -> None:
+        super().__init__()
         self._translate = translate
         self._rotate = rotate
         self._actions = (
@@ -238,15 +240,3 @@ class DQN:
                             observation, rewards = env.step(action)
                 except WindowClosed:
                     pass
-
-    def save(self, path: str) -> None:
-        torch.save(self, path)
-
-    @classmethod
-    def load(cls, path: str) -> Self:
-        dqn: Self = torch.load(path)
-        if isinstance(dqn, cls):
-            return dqn
-        else:
-            raise TypeError(f"Invalid type: {type(dqn)}")
-        

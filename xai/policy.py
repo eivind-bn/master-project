@@ -8,12 +8,13 @@ from numpy.typing import NDArray
 from numpy import float32, ndarray
 from .feed_forward import FeedForward
 from .optimizer import SGD, Adam, RMSprop
-from .fitness import Fitness
+from .fitness import NormalizedFitness
 from .activation import Activation, ActivationModule
 
 import torch
 import copy
 import math
+import random
 
 Device = Literal["cpu", "cuda", "cuda:0", "cuda:1", "auto"]
 
@@ -23,6 +24,7 @@ P = TypeVar("P", bound="Policy")
 class Policy(ABC):
     input_dim:      Tuple[int,...]
     output_dim:     Tuple[int,...]
+    hidden_layers:  Tuple[int,...]
     device:         Device
     network:        Sequential
     normalize:      float|None
@@ -47,7 +49,7 @@ class Policy(ABC):
                  .to(device=self.device, dtype=torch.float32))
             
         elif isinstance(X, FeedForward):
-            X = X.tensor()
+            X = X.tensor(True)
 
             if self.set_device:
                 X = X.to(device=self.device)
@@ -98,8 +100,25 @@ class Policy(ABC):
                     params[:] = torch.where(rands < rate, torch.normal(params, volatility), params)
 
     @staticmethod
-    def crossover(policies: Iterable[Tuple["Policy",Fitness]]) -> NoReturn:
-        raise NotImplementedError()
+    def crossover(policies: Iterable["Policy"], fitnesses: Iterable[NormalizedFitness|None]) -> "Policy":
+        policies = tuple(policies)
+        ranks = tuple(random.random() if fitness is None else fitness.rank() for fitness in fitnesses)
+        rank_sum = sum(ranks)
+        rank_portions = tuple(rank/rank_sum for rank in ranks)
+
+        new_policy: Policy|None = None
+
+        for policy,rank_portion in zip(policies,rank_portions, strict=True):
+            with torch.no_grad():
+                if new_policy is None:
+                    new_policy = policy.copy()
+                    for param in new_policy.network.parameters():
+                        param[:] = 1.0
+
+                for param,new_param in zip(policy.network.parameters(), new_policy.network.parameters()):
+                    new_param[:] = rank_portion*param
+
+        return new_policy
             
     def save(self, path: str) -> None:
         torch.save(self, path)
@@ -169,6 +188,7 @@ class Policy(ABC):
         return cls(
             input_dim=input_dim,
             output_dim=output_dim,
+            hidden_layers=tuple(layers[1:-1]),
             device=device,
             network=network,
             normalize=normalize,
@@ -180,6 +200,7 @@ class Policy(ABC):
         return other.__class__(
             input_dim=self.input_dim,
             output_dim=other.output_dim,
+            hidden_layers=self.hidden_layers + other.hidden_layers,
             device=self.device,
             network=self.network + other.network,
             normalize=self.normalize,

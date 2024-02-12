@@ -13,7 +13,7 @@ T = TypeVar("T")
 
 EvictionPolicy = Literal["FIFO", "Random", "Reject"]
 
-class Buffer(Generic[T], Sequence[T], Stream[T]):
+class Buffer(Generic[T], Sequence[Cache[T]], Stream[Cache[T]]):
 
     def __init__(self, 
                  entries:           Iterable[Cache[T]|T],
@@ -99,14 +99,18 @@ class Buffer(Generic[T], Sequence[T], Stream[T]):
         self.entries: Tuple[Cache[T],...] = tuple(data)
         super().__init__(self)
 
+    @property
+    def max_memory(self) -> Memory|None:
+        return self._max_memory
+
     def size(self) -> Bytes:
         return sum((entry.size() for entry in self.entries), start=Bytes(0))
     
     def length(self) -> int:
         return len(self.entries)
     
-    def randoms(self, with_replacement: bool) -> Stream[T]:
-        def iterator() -> Iterator[T]:
+    def randoms(self, with_replacement: bool) -> Stream[Cache[T]]:
+        def iterator() -> Iterator[Cache[T]]:
             N = len(self.entries)
             if with_replacement:
                 while True:
@@ -136,20 +140,18 @@ class Buffer(Generic[T], Sequence[T], Stream[T]):
         return self.extended(other)
     
     @overload
-    def __getitem__(self, loc: SupportsIndex) -> T: ...
+    def __getitem__(self, loc: SupportsIndex) -> Cache[T]: ...
 
     @overload
-    def __getitem__(self, loc: slice) -> Tuple[T,...]: ...
+    def __getitem__(self, loc: slice) -> Tuple[Cache[T],...]: ...
 
-    def __getitem__(self, loc: SupportsIndex|slice) -> T|Tuple[T,...]:
+    def __getitem__(self, loc: SupportsIndex|slice) -> Cache[T]|Tuple[Cache[T],...]:
         if isinstance(loc, SupportsIndex):
-            with self.entries[loc] as data:
-                return data
+            return self.entries[loc]
         else:
-            def load() -> Iterator[T]:
+            def load() -> Iterator[Cache[T]]:
                 for entry in self.entries[loc]:
-                    with entry as data:
-                        yield data
+                    yield entry
 
             return tuple(load())
         
@@ -166,8 +168,7 @@ class Buffer(Generic[T], Sequence[T], Stream[T]):
             return f"{cls_name}({use_ram=}, {entries=}, {size=:.2f}MB, {capacity=:.2f}%)"
         return f"{cls_name}({use_ram=}, {entries=}, {size=:.2f}MB)"
     
-    def __iter__(self) -> Iterator[T]:
+    def __iter__(self) -> Iterator[Cache[T]]:
         for entry in self.entries:
-            with entry as data:
-                yield data
+            yield entry
 
