@@ -118,12 +118,21 @@ class Stream(Iterable[X], Generic[X]):
                             
         return Stream(iterator())
     
-    def reduce(self, reducer: Callable[[Y,X],Y], start: Y) -> Y:
+    def reduce(self, start: Y, reducer: Callable[[Y,X],Y]) -> Y:
         y = start
         for x in self:
             y = reducer(y,x)
 
         return y
+    
+    def scan(self, start: Y, scanner: Callable[[Y,X],Y]) -> "Stream[Y]":
+        def iterator() -> Iterator[Y]:   
+            y = start
+            for x in self:
+                y = scanner(y,x)
+                yield y
+
+        return Stream(iterator())
     
     def peek(self, f: Callable[[X],None]) -> "Stream[X]":
         def iterator() -> Iterator[X]:
@@ -136,6 +145,16 @@ class Stream(Iterable[X], Generic[X]):
     def foreach(self, f: Callable[[X],None]) -> None:
         for x in self:
             f(x)
+
+    def chain(self, other: Iterable[X]) -> "Stream[X]":
+        def iterator() -> Iterator[X]:
+            for x in self:
+                yield x
+
+            for x in other:
+                yield x
+
+        return Stream(iterator())
 
     def all(self, f: Callable[[X],bool]) -> bool:
         return all(f(x) for x in self)
@@ -176,6 +195,9 @@ class Stream(Iterable[X], Generic[X]):
             max_entries=max_entries,
             verbose=verbose
         )
+    
+    def __add__(self, other: Iterable[X]) -> "Stream[X]":
+        return self.chain(other)
 
     def __iter__(self) -> Iterator[X]:
         return iter(self._source)

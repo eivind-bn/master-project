@@ -11,6 +11,7 @@ from .fitness import NormalizedFitness
 from .population import Population
 from .bytes import Memory
 from .buffer import Buffer
+from .stream import Stream
 
 import random
 
@@ -76,24 +77,12 @@ class Genome(Agent):
         )
     
     def populate(self, 
-                 population_size: int,
-                 max_memory:    Memory, 
-                 verbose:       bool = False) -> Population["Genome"]:
+                 population_size:   int,
+                 max_memory:        Memory, 
+                 verbose:           bool = False) -> Population["Genome"]:
         
-        genomes = Buffer(
-            entries=(self,),
-            eviction_policy="Random",
-            use_ram=False,
-            max_memory=max_memory,
-            verbose=verbose
-        )
-        while genomes.length() < population_size:
-            s1,s2 = random.choices(genomes, k=2)
-            with s1 as p1, s2 as p2:   
-                genomes = genomes.appended(p1.breed([p2], volatility=0.05, mutation_rate=0.05))
-
         return Population(
-            genomes=genomes,
+            genomes=Stream(lambda: self.clone()).scan(self, lambda y,x: y.breed(x)).take(population_size),
             max_memory=max_memory,
             verbose=verbose
         )

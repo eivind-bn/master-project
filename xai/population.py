@@ -24,11 +24,11 @@ T = TypeVar("T", bound="Genome")
 
 SelectionPolicy = Literal["Elitism", "Random", "Roulette", "Rank"]
 
-class Population(Generic[T], Sequence[Cache[T]]):
+class Population(Generic[T]):
     checkpoint_root = "checkpoints"
 
     def __init__(self, 
-                 genomes:       Iterable[Cache[T]|T],
+                 genomes:       Iterable[T],
                  max_memory:    Memory,
                  verbose:       bool = True) -> None:
 
@@ -70,15 +70,13 @@ class Population(Generic[T], Sequence[Cache[T]]):
                     continue
 
         def loader(text: str|None = None) -> Iterator[T]:
-            with tqdm(total=self._genome_pool.length(), desc=text) as bar:
-                for cache in self._genome_pool:
-                    with cache as genome:
-                        yield genome
+            with tqdm(total=self._genome_pool.entry_size(), desc=text) as bar:
+                for genome in self._genome_pool:
+                    yield genome
                     bar.update()
         
         with mp.Pool(processes=number_of_processes) as pool:
             for generation in range(generations):
-
 
                 self._fitnesses.clear()
                 encoder: Policy
@@ -93,9 +91,8 @@ class Population(Generic[T], Sequence[Cache[T]]):
                     self._observation_pool = self._observation_pool.extended(genome.observations)
 
                 observations = []
-                for cache in self._observation_pool.take(500):
-                    with cache as observation:
-                        observations.append(observation.translated().rotated().tensor(True, "auto"))
+                for observation in self._observation_pool.take(500):
+                    observations.append(observation.translated().rotated().tensor(True, "auto"))
 
                 observations = torch.stack(observations)
                 autoencoder.adam().fit(
@@ -107,11 +104,10 @@ class Population(Generic[T], Sequence[Cache[T]]):
                     verbose=True
                 )
 
-                for cache in self._genome_pool:
-                    with cache as genome:
-                        genome.encoder = encoder
-                        genome.decoder = decoder
-                        genome.autoencoder = autoencoder
+                for genome in self._genome_pool:
+                    genome.encoder = encoder
+                    genome.decoder = decoder
+                    genome.autoencoder = autoencoder
 
                 rewards: List[float] = []
 
@@ -124,23 +120,18 @@ class Population(Generic[T], Sequence[Cache[T]]):
                     rewards.append(total_reward)
 
                 print(f"Max: {max(rewards)} Min: {min(rewards)}, Mean: {sum(rewards)/len(rewards)}")
-                
-
-
-                    
-
 
                 survivors = self.selection("Elitism").take(survivors_cnt).tuple()
 
-                elites = self.selection("Elitism").take(elites_cnt).tuple()
-                roulettes = self.selection("Roulette").take(roulettes_cnt).tuple()
-                randoms = self.selection("Random").take(random_cnt).tuple()
+                elites = self.selection("Elitism").take(elites_cnt)
+                roulettes = self.selection("Roulette").take(roulettes_cnt)
+                randoms = self.selection("Random").take(random_cnt)
 
                 offsprings = self.populate(elites + roulettes + randoms)\
-                    .take(self._genome_pool.length()-survivors_cnt)\
+                    .take(self._genome_pool.entry_size()-survivors_cnt)\
                     .tuple()
                 
-                assert len(offsprings) + 1 == self._genome_pool.length()
+                assert len(offsprings) + 1 == self._genome_pool.entry_size()
 
                 self._genome_pool = Buffer(
                     entries=offsprings + survivors,
@@ -186,35 +177,45 @@ class Population(Generic[T], Sequence[Cache[T]]):
     @overload
     def selection(self, 
                   policy:   Literal["Elitism", "Roulette"], 
-                  criteria: Callable[[T],int|float]|None = None) -> Stream[Cache[T]]: ...
+                  criteria: Callable[[T],int|float]|None = None) -> Stream[T]: ...
 
     @overload
-    def selection(self, policy: SelectionPolicy) -> Stream[Cache[T]]: ...
+    def selection(self, policy: SelectionPolicy) -> Stream[T]: ...
 
-    def selection(self, policy: SelectionPolicy, criteria: Callable[[T],int|float]|None = None) -> Stream[Cache[T]]:
+    def selection(self, policy: SelectionPolicy, criteria: Callable[[T],int|float]|None = None) -> Stream[T]:
         if self._fitnesses is None:
             return Stream(self._genome_pool)
         
         ranks = tuple(fitness.rank() for fitness in Fitness.normalize_all(self._fitnesses))
-        indexed_ranks = sorted(enumerate(ranks), key=lambda n: n[1], reverse=True)
+        indices = Stream(sorted(enumerate(ranks), key=lambda n: n[1], reverse=True))\
+            .map(lambda ir: ir[0])\
+            .tuple()
 
         match policy:
             case "Elitism":
-                return Stream(indexed_ranks).map(lambda index_rank: self._genome_pool[index_rank[0]])
+                return self._genome_pool[indices]
             case "Roulette":
-                def roulette_select() -> Iterator[Cache[T]]:
+                def roulette_select() -> Iterator[Stream[T]]:
                     while True:
-                        index,_ = random.choices(indexed_ranks, weights=ranks)[0]
+                        index = random.choices(indices, weights=ranks)[0]
                         yield self._genome_pool[index]
 
-                return Stream(roulette_select())
+                return Stream(roulette_select()).flatmap(lambda stream: stream)
             case "Random":
-                def random_select() -> Iterator[Cache[T]]:
+                def random_select() -> Iterator[Stream[T]]:
                     while True:
-                        index,_ = random.choices(indexed_ranks)[0]
+                        index = random.choices(indices)[0]
                         yield self._genome_pool[index]
 
-                return Stream(random_select())
+                return Stream(random_select()).flatmap(lambda stream: stream)
+            case "Rank":
+                def rank_select() -> Iterator[Stream[T]]:
+                    weighs = tuple(range(len(indices)))[::-1]
+                    while True:
+                        index = random.choices(indices, weights=weighs)[0]
+                        yield self._genome_pool[index]
+                
+                return Stream(rank_select()).flatmap(lambda stream: stream)
             case _:
                 assert_never(policy)
 
@@ -225,14 +226,8 @@ class Population(Generic[T], Sequence[Cache[T]]):
             verbose=False
         )
 
-    @overload
-    def __getitem__(self, loc: int) -> Cache[T]: ...
-    
-    @overload
-    def __getitem__(self, loc: slice) -> Tuple[Cache[T],...]: ...
-
-    def __getitem__(self, loc: int|slice) -> Cache[T]|Tuple[Cache[T],...]:
+    def __getitem__(self, loc: int|slice) -> Stream[T]:
         return self._genome_pool[loc]
     
     def __len__(self) -> int:
-        return len(self._genome_pool)
+        return self._genome_pool.entry_size()
