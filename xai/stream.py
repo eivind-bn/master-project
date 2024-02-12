@@ -1,5 +1,8 @@
 from typing import *
-from typing import Iterator
+from .bytes import Memory
+
+if TYPE_CHECKING:
+    from .buffer import Buffer, EvictionPolicy
 
 X = TypeVar("X")
 Y = TypeVar("Y")
@@ -102,13 +105,17 @@ class Stream(Iterable[X], Generic[X]):
 
         return stream.map(lambda ix: ix[1])
     
-    def collect(self, collector: Dict[X,Y]) -> "Stream[Y]":
+    def collect(self, *cases: Callable[[X],Tuple[bool,Callable[[],Y]]]) -> "Stream[Y]":
         def iterator() -> Iterator[Y]:
             for x in self:
-                y = collector.get(x)
-                if y is not None:
-                    yield y
-
+                for case in cases:
+                    cond,result = case(x)
+                    if cond:
+                        if callable(result):
+                            yield result()
+                        else:
+                            yield result
+                            
         return Stream(iterator())
     
     def reduce(self, reducer: Callable[[Y,X],Y], start: Y) -> Y:
@@ -153,6 +160,22 @@ class Stream(Iterable[X], Generic[X]):
             return frozenset(self)
         else:
             return set(self)
+        
+    def buffer(self, 
+               eviction_policy: "EvictionPolicy", 
+               use_ram: bool, 
+               max_memory: Memory, 
+               max_entries: int, 
+               verbose: bool) -> "Buffer[X]":
+        from .buffer import Buffer
+        return Buffer(
+            entries=self,
+            eviction_policy=eviction_policy,
+            use_ram=use_ram,
+            max_memory=max_memory,
+            max_entries=max_entries,
+            verbose=verbose
+        )
 
     def __iter__(self) -> Iterator[X]:
         return iter(self._source)

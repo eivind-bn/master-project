@@ -54,8 +54,8 @@ class FeedForward:
         else:
             return magnitudes
     
-    def tensor(self) -> Tensor:
-        return self._output
+    def tensor(self, detach: bool) -> Tensor:
+        return self._output.detach() if detach else self._output
     
     def numpy(self) -> NDArray[float32]:
         return cast(NDArray[float32], self._output
