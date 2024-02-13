@@ -8,7 +8,6 @@ from .cache import Cache, Dump, Load
 from .stream import Stream
 
 import random
-import itertools
 import copy
 
 T = TypeVar("T")
@@ -127,23 +126,51 @@ class Buffer(Stream[T], Generic[T]):
         buffer = self.copy()
         buffer.extend(other, verbose)
         return buffer
-
-    def pop(self, loc: int) -> T:
-        with self._entries.pop(loc) as data:
-            return data
-
-    def pop_range(self, end: int, start: int = 0, step: int = 1) -> Stream[T]:       
-        def loader() -> Iterator[T]:
-            for i in range(start, end, step):
-                with self._entries.pop(start) as data:
-                    yield data
-
-        return Stream(loader())
     
-    def remove_range(self, end: int, start: int = 0, step: int = 1) -> None:
-        for i in range(start, end, step):
-            self._entries.pop(i)
+    @overload
+    def pop(self, loc: int) -> T: ...
+
+    @overload
+    def pop(self, loc: Iterable[int]) -> Stream[T]: ...
+
+    def pop(self, loc: int|Iterable[int]) -> T|Stream[T]:
+        if isinstance(loc, Iterable):
+            def loader() -> Iterator[T]:
+                for index in loc:
+                    with self._entries.pop(index) as data:
+                        yield data
+
+            return Stream(loader())
+        else:
+            with self._entries.pop(loc) as data:
+                return data
+            
+    def remove(self, loc: int|Iterable[int]) -> None:
+        if isinstance(loc, Iterable):
+            for index in loc:
+                self._entries.pop(index)
+        else:
+            self._entries.pop(loc)
+
+    def replace(self, 
+                loc: int|slice|Iterable[int], 
+                values: Cache[T]|T|Iterable[Cache[T]|T], 
+                verbose: bool = False) -> None:
+        if not isinstance(values, Iterable):
+            values = (values,)
+
+        if isinstance(loc, int):
+            loc = (loc,)
+        elif isinstance(loc, slice):
+            loc = range(loc.start, loc.stop, loc.step)
         
+        
+        for index,value in zip(loc, values, strict=True):
+            if isinstance(value, Cache):
+                self._entries[index] = value
+            else:
+                self._entries[index] = Load(value) if self._use_ram else Dump(value)
+
     def copy(self) -> Self:
         buffer = copy.copy(self)
         buffer._entries = self._entries.copy()
@@ -166,6 +193,9 @@ class Buffer(Stream[T], Generic[T]):
                     yield data
 
         return Stream(load())
+    
+    def __setitem__(self, loc: int|slice|Iterable[int], values: Cache[T]|T|Iterable[Cache[T]|T]) -> None:
+        pass
         
     def __repr__(self) -> str:
         cls_name = self.__class__.__name__
