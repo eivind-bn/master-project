@@ -97,18 +97,30 @@ class Population(Generic[T]):
 
                 print(f"Max: {max(rewards)} Min: {min(rewards)}, Mean: {sum(rewards)/len(rewards)}")
 
-                survivors = self.selection("Elitism", ranks).take(survivors_cnt)
+                survivors_idx = self.selection("Elitism", weights).take(survivors_cnt)
 
-                elites = self.selection("Elitism", weights).take(elites_cnt).tuple()
-                roulettes = self.selection("Roulette", weights).take(roulettes_cnt).tuple()
-                randoms = self.selection("Random", weights).take(random_cnt).tuple()
-                ranks = self.selection("Rank", weights).take(rank_cnt).tuple()
+                elites_idx = self.selection("Elitism", weights).take(elites_cnt).tuple()
+                roulettes_idx = self.selection("Roulette", weights).take(roulettes_cnt).tuple()
+                randoms_idx = self.selection("Random", weights).take(random_cnt).tuple()
+                ranks_idx = self.selection("Rank", weights).take(rank_cnt).tuple()
 
-                parents = elites + roulettes + randoms + ranks
+                parents_idx = elites_idx + roulettes_idx + randoms_idx + ranks_idx
 
-                offsprings
-                
-                assert len(offsprings) + 1 == self._genomes.entry_size()
+                def breed() -> Iterator[T]:
+                    p1, p2, = self._genomes[random.choices(parents_idx, k=2)]
+                    offspring = p1.breed(p2)
+                    yield offspring
+
+                old_population_idx = range(self._genomes.entry_size())
+
+                self._genomes.extended(
+                    other=self._genomes[survivors_idx] + Stream(breed()).take(len(old_population_idx)),
+                    eviction_policy="Throw",
+                    verbose=True
+                )
+
+                self._genomes.remove(old_population_idx)
+
 
     def populate(self, parents: Sequence[Cache[T]]) -> "Stream[T]":
         assert len(parents) > 0
@@ -129,7 +141,7 @@ class Population(Generic[T]):
 
         env: Asteroids = globals()["env"]
         step = 0
-        fitness = Fitness(rewards={"game_score": 0.0})
+        fitness = Fitness()
         observations: List[Observation] = []
         for episode in range(3):
             observation, rewards = env.reset()
@@ -189,7 +201,7 @@ class Population(Generic[T]):
             verbose=self._verbose
         )
 
-    def __getitem__(self, loc: int|slice) -> Stream[T]:
+    def __getitem__(self, loc: int|slice|Iterable[int]) -> Stream[T]:
         return self._genomes[loc]
     
     def __len__(self) -> int:

@@ -17,9 +17,7 @@ import random
 
 class Genome(Agent):
 
-    def __init__(self, 
-                 encoder: Policy, 
-                 decoder: Policy, 
+    def __init__(self,
                  translate: bool, 
                  rotate: bool,
                  policy: Policy|None = None) -> None:
@@ -34,18 +32,7 @@ class Genome(Agent):
             Actions.RIGHT,
             Actions.FIRE,
         )
-        self.encoder = encoder
-        self.decoder = decoder
 
-        if policy is not None:
-            self.policy = policy
-        else:
-            self.policy = Policy.new(
-                input_dim=self.encoder.output_dim,
-                output_dim=len(self._actions),
-                hidden_activation="ReLU"
-            )
-        self.autoencoder = self.encoder + self.decoder
 
     def transform_observation(self, observation: Observation) -> Tensor:
         if self._translate:
@@ -60,17 +47,16 @@ class Genome(Agent):
         policy = self.policy.predict(latent).numpy()
         return self._actions[policy.argmax()]
 
-    def breed(self, 
+    @classmethod
+    def breed(cls, 
               partners:         Iterable[Self],
               volatility:       float,
-              mutation_rate:    float) -> "Genome":
+              mutation_rate:    float) -> Self:
         policies = (self.policy,) + tuple(partner.policy for partner in partners)
         fitnesses = tuple(genome.fitness for genome in (self,) + tuple(partners))
         policy = self.policy.crossover(policies, fitnesses)
         self.policy.mutate(volatility=volatility, rate=mutation_rate)
         return Genome(
-            encoder=self.encoder,
-            decoder=self.decoder,
             translate=self._translate,
             rotate=self._rotate,
             policy=policy

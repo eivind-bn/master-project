@@ -33,6 +33,16 @@ class Fitness:
                 normalized_fitness.set_penalty(category, (penalty - min)/(max - min))
 
         return normalized_fitness
+    
+    def _reduce(self, operand: "Fitness", operation: Callable[[float,float],float]) -> "Fitness":
+        result = self.copy()
+        for category,reward in operand.rewards():
+            result._named_rewards[category] = result._named_rewards.get(category, 0) + reward
+
+        for category,penalty in operand.penalties():
+            result._named_penalties[category] = result._named_penalties.get(category, 0) + penalty
+
+        return result
 
     def __add__(self, other: "Fitness") -> "Fitness":
         result = self.copy()
@@ -43,15 +53,16 @@ class Fitness:
             result._named_penalties[category] = result._named_penalties.get(category, 0) + penalty
 
         return result
-
-    def __iadd__(self, other: "Fitness") -> "Fitness":
+    
+    def __sub__(self, other: "Fitness") -> "Fitness":
+        result = self.copy()
         for category,reward in other.rewards():
-            self._named_rewards[category] = self._named_rewards.get(category, 0) + reward
+            result._named_rewards[category] = result._named_rewards.get(category, 0) + reward
 
         for category,penalty in other.penalties():
-            self._named_penalties[category] = self._named_penalties.get(category, 0) + penalty
+            result._named_penalties[category] = result._named_penalties.get(category, 0) + penalty
 
-        return self
+        return result
 
     def rewards(self) -> Iterator[Tuple[str,float]]:
         for category,reward in self._named_rewards.items():
@@ -81,12 +92,12 @@ class Fitness:
 
     def copy(self) -> "Fitness":
         return Fitness(
-            rewards=self._named_rewards,
-            penalties=self._named_penalties
+            rewards=self._named_rewards.copy(),
+            penalties=self._named_penalties.copy()
         )
 
     @staticmethod
-    def max_fitness(fitnesses: Iterable["Fitness"]) -> "Fitness":
+    def max(fitnesses: Iterable["Fitness"]) -> "Fitness":
         max_fitness = Fitness()
         for fitness in fitnesses:
             for category,reward in fitness.rewards():
@@ -104,7 +115,7 @@ class Fitness:
         return max_fitness
 
     @staticmethod
-    def min_fitness(fitnesses: Iterable["Fitness"]) -> "Fitness":
+    def min(fitnesses: Iterable["Fitness"]) -> "Fitness":
         min_fitness = Fitness()
         for fitness in fitnesses:
             for category,reward in fitness.rewards():
@@ -122,11 +133,15 @@ class Fitness:
         return min_fitness
     
     @staticmethod
-    def normalize_all(fitnesses: Iterable["Fitness"]) -> Tuple["NormalizedFitness",...]:
+    def normalize(fitnesses: Iterable["Fitness"]) -> Tuple[float,...]:
         fitnesses = tuple(fitnesses)
-        min_fitness = Fitness.min_fitness(fitnesses)
-        max_fitness = Fitness.max_fitness(fitnesses)
+        min_fitness = Fitness.min(fitnesses)
+        max_fitness = Fitness.max(fitnesses)
         return tuple(fitness.normalized(min_fitness=min_fitness, max_fitness=max_fitness) for fitness in fitnesses)
+    
+    @staticmethod
+    def rank(fitnesses: Iterable["Fitness"]) -> Tuple[float,...]:
+        pass
 
 
 class NormalizedFitness(Fitness):

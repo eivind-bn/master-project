@@ -100,15 +100,14 @@ class Policy(ABC):
                     params[:] = torch.where(rands < rate, torch.normal(params, volatility), params)
 
     @staticmethod
-    def crossover(policies: Iterable["Policy"], fitnesses: Iterable[NormalizedFitness|None]) -> "Policy":
-        policies = tuple(policies)
-        ranks = tuple(random.random() if fitness is None else fitness.rank() for fitness in fitnesses)
-        rank_sum = sum(ranks)
-        rank_portions = tuple(rank/rank_sum for rank in ranks)
+    def crossover(policies: Sequence["Policy"], weights: Sequence[int|float]) -> "Policy":
+        assert len(policies) == len(weights)
+        weight_sum = sum(weights)
+        weight_portions = tuple(weight/weight_sum for weight in weights)
 
         new_policy: Policy|None = None
 
-        for policy,rank_portion in zip(policies,rank_portions, strict=True):
+        for policy,weight_portion in zip(policies,weight_portions, strict=True):
             with torch.no_grad():
                 if new_policy is None:
                     new_policy = policy.copy()
