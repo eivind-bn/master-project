@@ -23,7 +23,7 @@ class Buffer(Stream[T], Generic[T]):
                  entries:           Iterable[Cache[T]|T],
                  eviction_policy:   EvictionPolicy,
                  use_ram:           bool,
-                 max_memory:        Memory|None,
+                 max_memory:        Memory|None = None,
                  max_entries:       int|None = None, 
                  verbose:           bool = False) -> None:
         super().__init__(self)

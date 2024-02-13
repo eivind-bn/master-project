@@ -83,6 +83,6 @@ class Genome(Agent):
         
         return Population(
             genomes=Stream(lambda: self.clone()).scan(self, lambda y,x: y.breed(x)).take(population_size),
-            max_memory=max_memory,
+            max_genomes_memory=max_memory,
             verbose=verbose
         )
