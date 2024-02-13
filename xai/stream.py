@@ -1,6 +1,8 @@
 from typing import *
 from .bytes import Memory
 
+import dill
+
 if TYPE_CHECKING:
     from .buffer import Buffer, EvictionPolicy
 
@@ -195,6 +197,15 @@ class Stream(Iterable[X], Generic[X]):
             max_entries=max_entries,
             verbose=verbose
         )
+    
+    def save(self, path: Callable[[X], str]) -> None:
+        for x in self:
+            with open(path(x), "wb") as file:
+                dill.dump(x, file)
+
+    def drain(self) -> None:
+        for _ in self:
+            pass
     
     def __add__(self, other: Iterable[X]) -> "Stream[X]":
         return self.chain(other)

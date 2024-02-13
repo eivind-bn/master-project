@@ -14,7 +14,7 @@ T = TypeVar("T")
 
 EvictionPolicy = Literal["FIFO", "Random", "Reject", "Throw"]
 
-class AppendReject(Exception):
+class EntryRejection(Exception):
     pass
 
 class Buffer(Stream[T], Generic[T]):
@@ -27,27 +27,29 @@ class Buffer(Stream[T], Generic[T]):
                  max_entries:       int|None = None, 
                  verbose:           bool = False) -> None:
         super().__init__(self)
-        
-        match eviction_policy:
-            case "FIFO":
-                def evict() -> Cache[T]:
-                    return self._entries.pop(0)
-            case "Random":
-                def evict() -> Cache[T]:
-                    idx = random.randrange(0, len(self._entries))
-                    cache = self._entries.pop(idx)
-                    return cache
-            case "Reject":
-                def evict() -> Cache[T]:
-                    raise AppendReject()
-            case "Throw":
-                def evict() -> Cache[T]:
-                    raise OverflowError(f"Buffer is full.")
-            case _:
-                assert_never(eviction_policy)
 
-        self._evict = evict
-        self._eviction_policy = eviction_policy
+        def fifo_evict() -> Cache[T]:
+            return self._entries.pop(0)
+        
+        def random_evict() -> Cache[T]:
+            idx = random.randrange(0, len(self._entries))
+            cache = self._entries.pop(idx)
+            return cache
+        
+        def reject_evict() -> Cache[T]:
+            raise EntryRejection()
+        
+        def throw_evict() -> Cache[T]:
+            raise OverflowError(f"Buffer is full.")
+
+        self._eviction_policies: Dict[EvictionPolicy,Callable[[],Cache[T]]] = {
+            "FIFO": fifo_evict,
+            "Random": random_evict,
+            "Reject": reject_evict,
+            "Throw": throw_evict
+        }
+
+        self._evict = self._eviction_policies[eviction_policy]
         self._use_ram = use_ram
         self._max_memory = max_memory
         self._max_entries = max_entries
@@ -56,8 +58,16 @@ class Buffer(Stream[T], Generic[T]):
         self.extend(entries, verbose=verbose)
 
     @property
+    def use_ram(self) -> bool:
+        return self._use_ram
+
+    @property
     def max_memory(self) -> Memory|None:
         return self._max_memory
+    
+    @property
+    def max_entries(self) -> int|None:
+        return self._max_entries
 
     def byte_size(self) -> Bytes:
         return sum((entry.size() for entry in self._entries), start=Bytes(0))
@@ -67,7 +77,7 @@ class Buffer(Stream[T], Generic[T]):
     
     def randoms(self, with_replacement: bool) -> Stream[T]:
         def iterator() -> Iterator[T]:
-            N = len(self._entries)
+            N = self.entry_size()
             if with_replacement:
                 while True:
                     idx = random.randrange(0,N)
@@ -82,49 +92,52 @@ class Buffer(Stream[T], Generic[T]):
 
         return Stream(iterator())
     
-    def extend(self, entries: Iterable[Cache[T]|T], verbose: bool = False) -> None:
+    def extend(self, 
+               entries:         Iterable[Cache[T]|T], 
+               eviction_policy: EvictionPolicy|None = None,
+               verbose:         bool = False) -> None:
         byte_size = self.byte_size()
         entry_size = self.entry_size()
 
-        def get_desc() -> str:
-            loc = "RAM" if self._use_ram else "Disk"
-            used_gigs = byte_size.gigabytes().float()
-            if self._max_memory is not None:
-                max_gigs = self._max_memory.gigabytes().float()
-                return f"{loc} used: {used_gigs:.2f}/{max_gigs:.2f}GB"
-            else:
-                return f"{loc} used: {used_gigs:.2f}GB"
+        if eviction_policy is None:
+            evict = self._evict
+        else:
+            evict = self._eviction_policies[eviction_policy]
 
         try:
             with tqdm(disable=not verbose) as bar:
                 for entry in entries:
-                    if isinstance(entry, Cache):
-                        entry = entry.loaded() if self._use_ram else entry.dumped()
-                    else:
-                        entry = Load(entry) if self._use_ram else Dump(entry)
+                    entry = self._to_cache(entry)
 
                     new_size = byte_size + entry.size()
                     if self._max_memory is not None:
                         if new_size > self._max_memory:
                             while new_size > self._max_memory:
-                                new_size -= self._evict().size()
+                                new_size -= evict().size()
 
                     if self._max_entries is not None:
                         while not entry_size < self._max_entries:
-                            self._evict()
+                            evict()
                             entry_size -= 1
 
                     self._entries.append(entry)
                     byte_size = new_size
 
-                    bar.set_description(get_desc())
+                    bar.set_description(self._get_load_text(byte_size))
                     bar.update()
-        except AppendReject:
+        except EntryRejection:
             pass
 
-    def extended(self, other: Iterable[Cache[T]|T], verbose: bool = False) -> "Buffer[T]":
+    def extended(self, 
+                 other:             Iterable[Cache[T]|T], 
+                 eviction_policy:   EvictionPolicy|None = None,
+                 verbose:           bool = False) -> "Buffer[T]":
         buffer = self.copy()
-        buffer.extend(other, verbose)
+        buffer.extend(
+            entries=other,
+            eviction_policy=eviction_policy,
+            verbose=verbose
+        )
         return buffer
     
     @overload
@@ -153,28 +166,45 @@ class Buffer(Stream[T], Generic[T]):
             self._entries.pop(loc)
 
     def replace(self, 
-                loc: int|slice|Iterable[int], 
-                values: Cache[T]|T|Iterable[Cache[T]|T], 
-                verbose: bool = False) -> None:
-        if not isinstance(values, Iterable):
-            values = (values,)
+                entries:            Iterable[Tuple[int,Cache[T]|T]],
+                eviction_policy:    EvictionPolicy|None = None,
+                verbose:            bool = False) -> None:
 
-        if isinstance(loc, int):
-            loc = (loc,)
-        elif isinstance(loc, slice):
-            loc = range(loc.start, loc.stop, loc.step)
+        byte_size = self.byte_size()
+
+        if eviction_policy is None:
+            evict = self._evict
+        else:
+            evict = self._eviction_policies[eviction_policy]
         
-        
-        for index,value in zip(loc, values, strict=True):
-            if isinstance(value, Cache):
-                self._entries[index] = value
-            else:
-                self._entries[index] = Load(value) if self._use_ram else Dump(value)
+        try:
+            with tqdm(disable=not verbose) as bar:
+                for index,new_value in entries:
+                    old_value = self._entries[index]
+                    new_value = self._to_cache(new_value)
+
+                    if self._max_memory is not None:
+                        old_value_size = old_value.size()
+                        new_value_size = new_value.size()
+                        new_size = byte_size + new_value_size - old_value_size
+                        while new_size > self._max_memory:
+                            new_size -= evict().size()
+                        
+                    self._entries[index] = new_value
+                    byte_size = new_size
+
+                    bar.set_description(self._get_load_text(byte_size))
+                    bar.update()
+        except EntryRejection:
+            pass
 
     def copy(self) -> Self:
         buffer = copy.copy(self)
         buffer._entries = self._entries.copy()
         return buffer
+    
+    def clear(self) -> None:
+        self._entries.clear()
 
     def __add__(self, other: Iterable[Cache[T]|T]) -> "Buffer[T]":
         return self.extended(other)
@@ -193,9 +223,21 @@ class Buffer(Stream[T], Generic[T]):
                     yield data
 
         return Stream(load())
-    
-    def __setitem__(self, loc: int|slice|Iterable[int], values: Cache[T]|T|Iterable[Cache[T]|T]) -> None:
-        pass
+
+    def _to_cache(self, data: Cache[T]|T) -> Cache[T]:
+        if isinstance(data, Cache):
+            return data.loaded() if self._use_ram else data.dumped()
+        else:
+            return Load(data) if self._use_ram else Dump(data)
+        
+    def _get_load_text(self, current_size: Bytes) -> str:
+        loc = "RAM" if self._use_ram else "Disk"
+        used_gigs = current_size.gigabytes().float()
+        if self._max_memory is not None:
+            max_gigs = self._max_memory.gigabytes().float()
+            return f"{loc} used: {used_gigs:.2f}/{max_gigs:.2f}GB"
+        else:
+            return f"{loc} used: {used_gigs:.2f}GB"
         
     def __repr__(self) -> str:
         cls_name = self.__class__.__name__
