@@ -13,9 +13,6 @@ class Agent(ABC):
     def __init__(self) -> None:
         super().__init__()
         self.stats: Dict[str,Any] = {}
-        self.fitness: NormalizedFitness|None = None
-        self.observations = deque(maxlen=100)
-
 
     @abstractmethod
     def predict(self, observation: Observation) -> Action:

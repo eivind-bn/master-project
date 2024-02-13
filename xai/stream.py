@@ -2,6 +2,7 @@ from typing import *
 from .bytes import Memory
 
 import dill
+import matplotlib.pyplot as plt
 
 if TYPE_CHECKING:
     from .buffer import Buffer, EvictionPolicy

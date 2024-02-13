@@ -28,36 +28,37 @@ class Population(Generic[T]):
     checkpoint_root = "checkpoints"
 
     def __init__(self, 
-                 genomes:       Iterable[T],
-                 max_memory:    Memory,
-                 verbose:       bool = True) -> None:
+                 genomes:                   Iterable[T],
+                 max_genomes_memory:        Memory|None = GigaBytes(10),
+                 max_observations_memory:   Memory|None = GigaBytes(10),
+                 verbose:                   bool = True) -> None:
 
-        self._max_memory = max_memory
         self._verbose = verbose
-        self._fitnesses: List[NormalizedFitness] = []
-        self._genome_pool = Buffer(
+
+        self._genomes = Buffer(
             entries=genomes,
-            eviction_policy="Random", 
+            eviction_policy="Throw", 
             use_ram=False, 
-            max_memory=self._max_memory,
+            max_memory=max_genomes_memory,
             verbose=verbose
-            )
+        )
         
-        self._observation_pool: Buffer[Observation] = Buffer(
+        self._observations: Buffer[Observation] = Buffer(
             entries=(),
             eviction_policy="Random",
             use_ram=False,
-            max_memory=GigaBytes(5),
+            max_memory=max_observations_memory,
         )
         
     def evolve(self,
-               generations: int,
-               survivors_cnt: int,
-               elites_cnt: int,
-               roulettes_cnt: int,
-               random_cnt: int,
-               checkpoints_directory: str|None,
-               number_of_processes: int) -> None:
+               generations:             int,
+               survivors_cnt:           int,
+               elites_cnt:              int,
+               roulettes_cnt:           int,
+               random_cnt:              int,
+               rank_cnt:                int,
+               checkpoints_directory:   str|None,
+               number_of_processes:     int) -> None:
         
         torch.set_num_threads(1)
         
@@ -70,49 +71,24 @@ class Population(Generic[T]):
                     continue
 
         def loader(text: str|None = None) -> Iterator[T]:
-            with tqdm(total=self._genome_pool.entry_size(), desc=text) as bar:
-                for genome in self._genome_pool:
+            with tqdm(total=self._genomes.entry_size(), desc=text) as bar:
+                for genome in self._genomes:
                     yield genome
                     bar.update()
         
         with mp.Pool(processes=number_of_processes) as pool:
             for generation in range(generations):
 
-                self._fitnesses.clear()
-                encoder: Policy
-                decoder: Policy
-                autoencoder: Policy
+                fitnesses: List[Fitness] = []
                     
-                for genome in pool.imap(self.eval_fitness, loader(f"Generation: {generation}/{generations}")):
-                    encoder = genome.encoder
-                    decoder = genome.decoder
-                    autoencoder = genome.autoencoder
-                    self._fitnesses.append(genome.fitness)
-                    self._observation_pool = self._observation_pool.extended(genome.observations)
+                for fitness,observations in pool.imap(self.eval_fitness, loader(f"Generation: {generation}/{generations}")):
+                    fitnesses.append(fitness)
+                    self._observations = self._observations.extended(observations)
 
-                observations = []
-                for observation in self._observation_pool.take(500):
-                    observations.append(observation.translated().rotated().tensor(True, "auto"))
+                weights = Fitness.ranks(fitnesses)
 
-                observations = torch.stack(observations)
-                autoencoder.adam().fit(
-                    X=observations,
-                    Y=observations,
-                    epochs=100,
-                    batch_size=128,
-                    loss_criterion="MSELoss",
-                    verbose=True
-                )
-
-                for genome in self._genome_pool:
-                    genome.encoder = encoder
-                    genome.decoder = decoder
-                    genome.autoencoder = autoencoder
-
-                rewards: List[float] = []
-
-                for fitness in self._fitnesses:
-                    total_reward = 0
+                for fitness in fitnesses:
+                    total_reward = 0.0
 
                     for name,reward in fitness.rewards():
                         total_reward += reward
@@ -121,25 +97,18 @@ class Population(Generic[T]):
 
                 print(f"Max: {max(rewards)} Min: {min(rewards)}, Mean: {sum(rewards)/len(rewards)}")
 
-                survivors = self.selection("Elitism").take(survivors_cnt).tuple()
+                survivors = self.selection("Elitism", ranks).take(survivors_cnt)
 
-                elites = self.selection("Elitism").take(elites_cnt)
-                roulettes = self.selection("Roulette").take(roulettes_cnt)
-                randoms = self.selection("Random").take(random_cnt)
+                elites = self.selection("Elitism", weights).take(elites_cnt).tuple()
+                roulettes = self.selection("Roulette", weights).take(roulettes_cnt).tuple()
+                randoms = self.selection("Random", weights).take(random_cnt).tuple()
+                ranks = self.selection("Rank", weights).take(rank_cnt).tuple()
 
-                offsprings = self.populate(elites + roulettes + randoms)\
-                    .take(self._genome_pool.entry_size()-survivors_cnt)\
-                    .tuple()
+                parents = elites + roulettes + randoms + ranks
+
+                offsprings
                 
-                assert len(offsprings) + 1 == self._genome_pool.entry_size()
-
-                self._genome_pool = Buffer(
-                    entries=offsprings + survivors,
-                    eviction_policy="Random",
-                    use_ram=False,
-                    max_memory=self._max_memory,
-                    verbose=self._verbose
-                )
+                assert len(offsprings) + 1 == self._genomes.entry_size()
 
     def populate(self, parents: Sequence[Cache[T]]) -> "Stream[T]":
         assert len(parents) > 0
@@ -154,13 +123,14 @@ class Population(Generic[T]):
         return Stream(iterator())
         
     @staticmethod
-    def eval_fitness(genome: T) -> T:
+    def eval_fitness(genome: T) -> Tuple[Fitness,Tuple[Observation,...]]:
         if "env" not in globals():
             globals()["env"] = Asteroids()
 
         env: Asteroids = globals()["env"]
         step = 0
         fitness = Fitness(rewards={"game_score": 0.0})
+        observations: List[Observation] = []
         for episode in range(3):
             observation, rewards = env.reset()
             while step < 3000 and env.running():
@@ -168,66 +138,59 @@ class Population(Generic[T]):
                 action = genome.predict(observation)
                 observation, rewards = env.step(action)
                 if random.random() < 0.2:
-                    genome.observations.append(observation)
+                    observations.append(observation)
                 fitness += Fitness(rewards={"game_score": sum(reward.value for reward in rewards)})
 
-        genome.fitness = fitness
-        return genome
+        return fitness, tuple(observations)
 
     @overload
-    def selection(self, 
-                  policy:   Literal["Elitism", "Roulette"], 
-                  criteria: Callable[[T],int|float]|None = None) -> Stream[T]: ...
+    def selection(self, policy: SelectionPolicy, weights: Sequence[int|float]) -> Stream[int]: ...
 
     @overload
-    def selection(self, policy: SelectionPolicy) -> Stream[T]: ...
+    def selection(self, policy: Literal["Random"]) -> Stream[int]: ...
 
-    def selection(self, policy: SelectionPolicy, criteria: Callable[[T],int|float]|None = None) -> Stream[T]:
-        if self._fitnesses is None:
-            return Stream(self._genome_pool)
-        
-        ranks = tuple(fitness.rank() for fitness in Fitness.normalize_all(self._fitnesses))
-        indices = Stream(sorted(enumerate(ranks), key=lambda n: n[1], reverse=True))\
-            .map(lambda ir: ir[0])\
-            .tuple()
+    def selection(self, policy: SelectionPolicy, weights: Sequence[int|float]|None = None) -> Stream[int]:
+        if policy == "Random":
+            indices = tuple(range(self._genomes.entry_size()))
+            def random_select() -> Iterator[int]:
+                while True:
+                    index = random.choices(indices)[0]
+                    yield index
 
-        match policy:
-            case "Elitism":
-                return self._genome_pool[indices]
-            case "Roulette":
-                def roulette_select() -> Iterator[Stream[T]]:
-                    while True:
-                        index = random.choices(indices, weights=ranks)[0]
-                        yield self._genome_pool[index]
-
-                return Stream(roulette_select()).flatmap(lambda stream: stream)
-            case "Random":
-                def random_select() -> Iterator[Stream[T]]:
-                    while True:
-                        index = random.choices(indices)[0]
-                        yield self._genome_pool[index]
-
-                return Stream(random_select()).flatmap(lambda stream: stream)
-            case "Rank":
-                def rank_select() -> Iterator[Stream[T]]:
-                    weighs = tuple(range(len(indices)))[::-1]
-                    while True:
-                        index = random.choices(indices, weights=weighs)[0]
-                        yield self._genome_pool[index]
+            return Stream(random_select())
+        elif weights is not None:
+            assert len(weights) == self._genomes.entry_size()
+            match policy:
+                case "Elitism":
+                    return Stream(sorted(enumerate(weights), key=lambda n: n[1], reverse=True))\
+                        .map(lambda ir: ir[0])
                 
-                return Stream(rank_select()).flatmap(lambda stream: stream)
-            case _:
-                assert_never(policy)
+                case "Roulette":
+                    indices = tuple(range(self._genomes.entry_size()))
+                    return Stream(lambda: random.choices(indices, weights=weights)[0])
+                
+                case "Rank":
+                    indices = Stream(sorted(enumerate(weights), key=lambda n: n[1], reverse=True))\
+                            .map(lambda ir: ir[0])\
+                            .tuple()
+                    weights = tuple(range(len(indices)))[::-1]
+                    return Stream(lambda: random.choices(indices, weights=weights)[0])
+                
+                case _:
+                    assert_never(policy)
+        else:
+            raise ValueError(f"Selection policy '{policy}' requires weights to be provided.")
 
     def __add__(self, other: "Population[T]") -> "Population[T]":
         return Population(
-            max_memory=self._max_memory,
-            genomes=self._genome_pool + other._genome_pool,
-            verbose=False
+            genomes=self._genomes + other._genomes,
+            max_genomes_memory=self._genomes.max_memory,
+            max_observations_memory=self._observations.max_memory,
+            verbose=self._verbose
         )
 
     def __getitem__(self, loc: int|slice) -> Stream[T]:
-        return self._genome_pool[loc]
+        return self._genomes[loc]
     
     def __len__(self) -> int:
-        return self._genome_pool.entry_size()
+        return self._genomes.entry_size()
