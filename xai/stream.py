@@ -7,8 +7,9 @@ import matplotlib.pyplot as plt
 if TYPE_CHECKING:
     from .buffer import Buffer, EvictionPolicy
 
-X = TypeVar("X")
+X = TypeVar("X", covariant=True)
 Y = TypeVar("Y")
+Z = TypeVar("Z")
 
 class Stream(Iterable[X], Generic[X]):
 
@@ -60,7 +61,12 @@ class Stream(Iterable[X], Generic[X]):
         return Stream(iterator())
     
     def filter_not(self, predicate: Callable[[X],bool]) -> "Stream[X]":
-        return self.filter(lambda x: not predicate(x))
+        def iterator() -> Iterator[X]:
+            for x in self:
+                if not predicate(x):
+                    yield x
+
+        return Stream(iterator())
     
     def take(self, count: int) -> "Stream[X]":
         return (self.enumerate()
@@ -114,10 +120,7 @@ class Stream(Iterable[X], Generic[X]):
                 for case in cases:
                     cond,result = case(x)
                     if cond:
-                        if callable(result):
-                            yield result()
-                        else:
-                            yield result
+                        yield result()
                             
         return Stream(iterator())
     
@@ -127,6 +130,13 @@ class Stream(Iterable[X], Generic[X]):
             y = reducer(y,x)
 
         return y
+    
+    def find(self, predicate: Callable[[X],bool], default: Y) -> X|Y:
+        for x in self:
+            if predicate(x):
+                return x
+            
+        return default
     
     def scan(self, start: Y, scanner: Callable[[Y,X],Y]) -> "Stream[Y]":
         def iterator() -> Iterator[Y]:   
@@ -158,6 +168,28 @@ class Stream(Iterable[X], Generic[X]):
                 yield x
 
         return Stream(iterator())
+    
+    @overload
+    def group_by(self, key: Callable[[X],Tuple[Y,Z]]) -> "Stream[List[Z]]": ...
+
+    @overload
+    def group_by(self, 
+                 key:       Callable[[X],Tuple[Y,Z]], 
+                 reduce:    Callable[[Z,Z],Z]) -> "Stream[Z]": ...
+    
+    def group_by(self, 
+                 key:       Callable[[X],Tuple[Y,Z]],
+                 reduce:    Callable[[Z,Z],Z]|None = None) -> "Stream[List[Z]|Z]":
+        
+        def iterator() -> Iterator[List[Z]|Z]:
+            if reduce is None:
+                for z_list in Stream(self.dict(key).values()):
+                    yield z_list
+            else:
+                for z in Stream(self.dict(key, reduce).values()):
+                    yield z
+
+        return Stream(iterator())
 
     def all(self, f: Callable[[X],bool]) -> bool:
         return all(f(x) for x in self)
@@ -182,6 +214,36 @@ class Stream(Iterable[X], Generic[X]):
             return frozenset(self)
         else:
             return set(self)
+        
+    @overload
+    def dict(self, key: Callable[[X],Tuple[Y,Z]]) -> Dict[Y,List[Z]]: ...
+
+    @overload
+    def dict(self, 
+             key:       Callable[[X],Tuple[Y,Z]], 
+             reduce:    Callable[[Z,Z],Z]) -> Dict[Y,Z]: ...
+        
+    def dict(self, 
+             key:       Callable[[X],Tuple[Y,Z]],
+             reduce:    Callable[[Z,Z],Z]|None = None) -> Mapping[Y,List[Z]|Z]:
+        if reduce is None:
+            key_list_z: Dict[Y, List[Z]] = {}
+            for x in self:
+                y,z = key(x)
+                key_list_z.setdefault(y, []).append(z)
+
+            return key_list_z
+        else:
+            key_z: Dict[Y,Z] = {}
+            for x in self:
+                y,z2 = key(x)
+                z1 = key_z.get(y)
+                if z1 is None:
+                    key_z[y] = z2
+                else:
+                    key_z[y] = reduce(z1, z2)
+
+            return key_z
         
     def buffer(self, 
                eviction_policy: "EvictionPolicy", 
