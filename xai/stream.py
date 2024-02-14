@@ -170,26 +170,32 @@ class Stream(Iterable[X], Generic[X]):
         return Stream(iterator())
     
     @overload
-    def group_by(self, key: Callable[[X],Tuple[Y,Z]]) -> "Stream[List[Z]]": ...
+    def group_by(self:      "Stream[Tuple[Y,Z]]",
+                 *,
+                 key:       Callable[[X],Tuple[Y,Z]] = ...) -> "Stream[List[Z]]": ...
 
     @overload
     def group_by(self, 
+                 *,
+                 key:       Callable[[X],Tuple[Y,Z]]) -> "Stream[List[Z]]": ...
+
+    @overload
+    def group_by(self:      "Stream[Tuple[Y,Z]]",
+                 *,
+                 key:       Callable[[X],Tuple[Y,Z]] = ...,
+                 reduce:    Callable[[Z,Z],Z]) -> "Stream[Z]": ...
+
+    @overload
+    def group_by(self, 
+                 *,
                  key:       Callable[[X],Tuple[Y,Z]], 
                  reduce:    Callable[[Z,Z],Z]) -> "Stream[Z]": ...
-    
-    def group_by(self, 
-                 key:       Callable[[X],Tuple[Y,Z]],
-                 reduce:    Callable[[Z,Z],Z]|None = None) -> "Stream[List[Z]|Z]":
         
-        def iterator() -> Iterator[List[Z]|Z]:
-            if reduce is None:
-                for z_list in Stream(self.dict(key).values()):
-                    yield z_list
-            else:
-                for z in Stream(self.dict(key, reduce).values()):
-                    yield z
+    def group_by(self, 
+                 key:       Callable[[X],Tuple[Y,Z]]|None = None,
+                 reduce:    Callable[[Z,Z],Z]|None = None) -> "Stream[List[Z]|Z]":
 
-        return Stream(iterator())
+        return Stream(self.dict(key=key, reduce=reduce)).map(lambda key_value: key_value[1]) # type: ignore
 
     def all(self, f: Callable[[X],bool]) -> bool:
         return all(f(x) for x in self)
@@ -216,32 +222,67 @@ class Stream(Iterable[X], Generic[X]):
             return set(self)
         
     @overload
-    def dict(self, key: Callable[[X],Tuple[Y,Z]]) -> Dict[Y,List[Z]]: ...
+    def dict(self:      "Stream[Tuple[Y,Z]]",
+             *,
+             key:       Callable[[X],Tuple[Y,Z]] = ...) -> Dict[Y,List[Z]]: ...
 
     @overload
     def dict(self, 
+             *,
+             key:       Callable[[X],Tuple[Y,Z]]) -> Dict[Y,List[Z]]: ...
+
+    @overload
+    def dict(self:      "Stream[Tuple[Y,Z]]",
+             *,
+             key:       Callable[[X],Tuple[Y,Z]] = ...,
+             reduce:    Callable[[Z,Z],Z]) -> Dict[Y,Z]: ...
+
+    @overload
+    def dict(self, 
+             *,
              key:       Callable[[X],Tuple[Y,Z]], 
              reduce:    Callable[[Z,Z],Z]) -> Dict[Y,Z]: ...
         
     def dict(self, 
-             key:       Callable[[X],Tuple[Y,Z]],
+             key:       Callable[[X],Tuple[Y,Z]]|None = None,
              reduce:    Callable[[Z,Z],Z]|None = None) -> Mapping[Y,List[Z]|Z]:
+        
         if reduce is None:
             key_list_z: Dict[Y, List[Z]] = {}
-            for x in self:
-                y,z = key(x)
-                key_list_z.setdefault(y, []).append(z)
+            if key is None:
+                for x in self:
+                    if isinstance(x, tuple):
+                        y,z = x
+                        key_list_z.setdefault(y, []).append(z)
+                    else:
+                        raise TypeError("Implicit dict construction failed. Expected Stream[Tuple[Y,X]] if key is not provided.")
+            else:
+                for x in self:
+                    y,z = key(x)
+                    key_list_z.setdefault(y, []).append(z)
 
             return key_list_z
         else:
             key_z: Dict[Y,Z] = {}
-            for x in self:
-                y,z2 = key(x)
-                z1 = key_z.get(y)
-                if z1 is None:
-                    key_z[y] = z2
-                else:
-                    key_z[y] = reduce(z1, z2)
+            if key is None:
+                for x in self:
+                    if isinstance(x, tuple):
+                        y,z2 = x
+                        z1 = key_z.get(y)
+                        if z1 is None:
+                            key_z[y] = z2
+                        else:
+                            key_z[y] = reduce(z1, z2)
+                    else:
+                        raise TypeError("Implicit dict construction failed. Expected Stream[Tuple[Y,X]] if key is not provided.")
+            else:
+                for x in self:
+                    y,z2 = key(x)
+                    z1 = key_z.get(y)
+                    if z1 is None:
+                        key_z[y] = z2
+                    else:
+                        key_z[y] = reduce(z1, z2)
 
             return key_z
         
@@ -275,3 +316,7 @@ class Stream(Iterable[X], Generic[X]):
 
     def __iter__(self) -> Iterator[X]:
         return iter(self._source)
+    
+    @staticmethod
+    def empty() -> "Stream[Never]":
+        return Stream(tuple())
