@@ -1,20 +1,17 @@
 from typing import *
 from abc import ABC
 from dataclasses import dataclass
-from typing import Callable
-from torch import Tensor, device
-from torch.nn import Sequential, Parameter, Module
+from torch import Tensor
+from torch.nn import Sequential
 from numpy.typing import NDArray
 from numpy import float32, ndarray
 from .feed_forward import FeedForward
 from .optimizer import SGD, Adam, RMSprop
-from .fitness import NormalizedFitness
 from .activation import Activation, ActivationModule
 
 import torch
 import copy
 import math
-import random
 
 Device = Literal["cpu", "cuda", "cuda:0", "cuda:1", "auto"]
 

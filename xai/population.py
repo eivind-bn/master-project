@@ -85,17 +85,15 @@ class Population(Generic[T]):
                     fitnesses.append(fitness)
                     self._observations = self._observations.extended(observations)
 
-                weights = Fitness.ranks(fitnesses)
+                weights = Fitness.product_score(fitnesses)
 
-                for fitness in fitnesses:
-                    total_reward = 0.0
+                rankings = Stream(weights).enumerate().sort(key=lambda t: t[1]).tuple()
+                if rankings:
+                    worst = rankings[0]
+                    best = rankings[1]
 
-                    for name,reward in fitness.rewards():
-                        total_reward += reward
-
-                    rewards.append(total_reward)
-
-                print(f"Max: {max(rewards)} Min: {min(rewards)}, Mean: {sum(rewards)/len(rewards)}")
+                    print(f"Worst: {worst}")
+                    print(f"Best: {best}")
 
                 survivors_idx = self.selection("Elitism", weights).take(survivors_cnt)
 
@@ -120,19 +118,6 @@ class Population(Generic[T]):
                 )
 
                 self._genomes.remove(old_population_idx)
-
-
-    def populate(self, parents: Sequence[Cache[T]]) -> "Stream[T]":
-        assert len(parents) > 0
-
-        def iterator() -> Iterator[T]:
-            while True:
-                s1,s2 = random.choices(parents, k=2)
-                with s1 as p1, s2 as p2:
-                    offspring = p1.breed([p2], volatility=0.05, mutation_rate=0.05)
-                    yield offspring
-
-        return Stream(iterator())
         
     @staticmethod
     def eval_fitness(genome: T) -> Tuple[Fitness,Tuple[Observation,...]]:

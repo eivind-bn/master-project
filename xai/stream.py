@@ -138,6 +138,76 @@ class Stream(Iterable[X], Generic[X]):
             
         return default
     
+    @overload
+    def sort(self:      "Stream[int]",
+             key:       Callable[[X],int|float] = ...,
+             ascending: bool = ...) -> "Stream[X]": ...
+    
+    @overload
+    def sort(self:      "Stream[float]",
+             key:       Callable[[X],int|float] = ...,
+             ascending: bool = ...) -> "Stream[X]": ...
+    
+    @overload
+    def sort(self,
+             key:       Callable[[X],int|float] = ...,
+             ascending: bool = ...) -> "Stream[X]": ...
+    
+    def sort(self, 
+             key:       Callable[[X],int|float]|None = None,
+             ascending: bool = True) -> "Stream[X]":
+        
+        if key is None:
+            key = lambda x: cast(int|float, x)
+        
+        def iterator() -> Iterator[X]:
+            for x in sorted(self, key=key, reverse=not ascending):
+                yield x
+
+        return Stream(iterator())
+    
+    @overload
+    def min(self:       "Stream[int]",
+            default:    Y,
+            key:        Callable[[X|Y],int|float] = ...) -> X|Y: ...
+    
+    @overload
+    def min(self:       "Stream[float]",
+            default:    Y,
+            key:        Callable[[X|Y],int|float] = ...) -> X|Y: ...
+    
+    @overload
+    def min(self,
+            default:    Y,
+            key:        Callable[[X|Y],int|float] = ...) -> X|Y: ...
+    
+    def min(self, 
+            default:    Y,
+            key:        Callable[[X|Y],int|float]|None = None) -> X|Y:
+        
+        return min(self, key=cast(Callable[[X|Y],int|float], key), default=default)
+    
+    @overload
+    def max(self:       "Stream[int]",
+            default:    Y,
+            key:        Callable[[X],int|float] = ...) -> X|Y: ...
+    
+    @overload
+    def max(self:       "Stream[float]",
+            default:    Y,
+            key:        Callable[[X],int|float] = ...) -> X|Y: ...
+    
+    @overload
+    def max(self,
+            default:    Y,
+            key:        Callable[[X],int|float] = ...) -> X|Y: ...
+    
+    def max(self, 
+            default:    Y,
+            key:        Callable[[X],int|float]|None = None) -> X|Y:
+        
+        return max(self, key=cast(Callable[[X|Y],int|float], key), default=default)
+    
     def scan(self, start: Y, scanner: Callable[[Y,X],Y]) -> "Stream[Y]":
         def iterator() -> Iterator[Y]:   
             y = start

@@ -7,24 +7,35 @@ from .action import Action
 from .policy import Policy
 from .action import Actions
 from .policy import Policy
-from .fitness import NormalizedFitness
 from .population import Population
 from .bytes import Memory
 from .buffer import Buffer
 from .stream import Stream
+from .asteroids import Asteroids
 
 import random
 
 class Genome(Agent):
 
+    @overload
+    def __init__(self, 
+                 *,
+                 parents:   Sequence[Self]) -> None: ...
+
+    @overload
     def __init__(self,
+                 *,
                  translate: bool, 
-                 rotate: bool,
-                 policy: Policy|None = None) -> None:
+                 rotate:    bool) -> None: ...
+
+    def __init__(self,
+                 *,
+                 parents:   Sequence[Self]|None = None,
+                 translate: bool|None = None, 
+                 rotate:    bool|None = None) -> None:
         super().__init__()
+
         self.stats: Dict[str,Any] = {}
-        self._translate = translate
-        self._rotate = rotate
         self._actions = (
             Actions.NOOP,
             Actions.UP,
@@ -33,6 +44,26 @@ class Genome(Agent):
             Actions.FIRE,
         )
 
+        if parents is None:
+            assert translate is not None and rotate is not None
+            self._translate = translate
+            self._rotate = rotate
+            self._policy = Policy.new(
+                input_dim=Asteroids.observation_shape,
+                output_dim=len(self._actions),
+                hidden_layers=[2**10, 2**6]
+                )
+        else:
+            self._translate = parents[0]._translate
+            self._rotate = parents[0]._rotate
+
+            for parent in parents:
+                assert self._translate == parent._translate
+                assert self._rotate == parent._rotate
+
+            
+
+                    
 
     def transform_observation(self, observation: Observation) -> Tensor:
         if self._translate:
@@ -43,24 +74,8 @@ class Genome(Agent):
         return observation.tensor(normalize=True, device="auto")
     
     def predict(self, observation: Observation) -> Action:
-        latent = self.encoder.predict(self.transform_observation(observation))
-        policy = self.policy.predict(latent).numpy()
-        return self._actions[policy.argmax()]
-
-    @classmethod
-    def breed(cls, 
-              partners:         Iterable[Self],
-              volatility:       float,
-              mutation_rate:    float) -> Self:
-        policies = (self.policy,) + tuple(partner.policy for partner in partners)
-        fitnesses = tuple(genome.fitness for genome in (self,) + tuple(partners))
-        policy = self.policy.crossover(policies, fitnesses)
-        self.policy.mutate(volatility=volatility, rate=mutation_rate)
-        return Genome(
-            translate=self._translate,
-            rotate=self._rotate,
-            policy=policy
-        )
+        policy = self._policy.predict(self.transform_observation(observation))
+        return self._actions[int(policy.tensor(True).argmax().item())]
     
     def populate(self, 
                  population_size:   int,
