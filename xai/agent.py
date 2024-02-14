@@ -1,9 +1,7 @@
 from typing import *
 from abc import ABC, abstractmethod
-from collections import deque
 from .observation import Observation
 from .action import Action
-from .fitness import NormalizedFitness
 
 import dill
 import copy
@@ -16,13 +14,6 @@ class Agent(ABC):
 
     @abstractmethod
     def predict(self, observation: Observation) -> Action:
-        pass
-
-    @abstractmethod
-    def breed(self,               
-              partners:         Iterable[Self], 
-              volatility:       float,
-              mutation_rate:    float) -> Self:
         pass
 
     def save(self, path: str) -> None:

@@ -11,23 +11,32 @@ class Fitness:
         self._rewards = {} if rewards is None else rewards
         self._penalties = {} if penalties is None else penalties
     
-    def _reduce(self, other: "Fitness", op: Callable[[float,float],float]) -> "Fitness":
-        return Fitness(
-            rewards=self.rewards().chain(other.rewards()).dict(reduce=lambda z1,z2: op(z1,z2)),
-            penalties=self.penalties().chain(other.penalties()).dict(reduce=lambda z1,z2: op(z1,z2))
-        )
+    def _reduce(self, other: "Fitness|int|float", op: Callable[[int|float,int|float],int|float]) -> "Fitness":
+        if isinstance(other, Fitness):
+            return Fitness(
+                rewards=self.rewards().chain(other.rewards()).dict(reduce=lambda z1,z2: op(z1,z2)),
+                penalties=self.penalties().chain(other.penalties()).dict(reduce=lambda z1,z2: op(z1,z2))
+            )
+        else:
+            return Fitness(
+                rewards=self.rewards().map(lambda kv: (kv[0], op(kv[1], other))).dict(reduce=lambda z1,z2: z1+z2),
+                penalties=self.penalties().map(lambda kv: (kv[0], op(kv[1], other))).dict(reduce=lambda z1,z2: z1+z2)
+            )
 
-    def __add__(self, other: "Fitness") -> "Fitness":
+    def __add__(self, other: "Fitness|int|float") -> "Fitness":
         return self._reduce(other, lambda x,y: x+y)
     
-    def __sub__(self, other: "Fitness") -> "Fitness":
+    def __sub__(self, other: "Fitness|int|float") -> "Fitness":
         return self._reduce(other, lambda x,y: x-y)
     
-    def __mul__(self, other: "Fitness") -> "Fitness":
+    def __mul__(self, other: "Fitness|int|float") -> "Fitness":
         return self._reduce(other, lambda x,y: x*y)
     
-    def __truediv__(self, other: "Fitness") -> "Fitness":
+    def __truediv__(self, other: "Fitness|int|float") -> "Fitness":
         return self._reduce(other, lambda x,y: x/y)
+    
+    def __pow__(self, other: "Fitness") -> "Fitness":
+        return self._reduce(other, lambda x,y: x**y)
     
     def safe_divide(self, other: "Fitness", neutral_element: float) -> "Fitness":
         return self._reduce(other, lambda x,y: x/y if y != 0.0 else neutral_element)
@@ -77,10 +86,10 @@ class Fitness:
         return Stream(fitnesses).map(lambda fitness: (fitness - min).safe_divide(difference, 0.0))
     
     @staticmethod
-    def ranks(fitnesses: Sequence["Fitness"], order: int = 1) -> Tuple[float,...]:
+    def product_score(fitnesses: Sequence["Fitness"]) -> Tuple[float,...]:
         ranks: List[float] = []
         for fitness in Fitness.normalize(fitnesses):
-            ranks.append(fitness.rewards().reduce(1.0, lambda z,kv: z*kv[1]**order) * fitness.penalties().reduce(1.0, lambda z,kv: z*(1.0 - kv[1]**order)))
+            ranks.append(fitness.rewards().reduce(1.0, lambda z,kv: z*kv[1]) * fitness.penalties().reduce(1.0, lambda z,kv: z*(1.0 - kv[1])))
 
         return tuple(ranks)
 
