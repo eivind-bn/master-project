@@ -172,30 +172,67 @@ class Stream(Iterable[X], Generic[X]):
     @overload
     def group_by(self:      "Stream[Tuple[Y,Z]]",
                  *,
-                 key:       Callable[[X],Tuple[Y,Z]] = ...) -> "Stream[List[Z]]": ...
+                 key:       Callable[[X],Tuple[Y,Z]] = ...,
+                 keep_key:  Literal[False] = ...) -> "Stream[List[Z]]": ...
 
     @overload
     def group_by(self, 
                  *,
-                 key:       Callable[[X],Tuple[Y,Z]]) -> "Stream[List[Z]]": ...
+                 key:       Callable[[X],Tuple[Y,Z]],
+                 keep_key:  Literal[False] = ...) -> "Stream[List[Z]]": ...
 
     @overload
     def group_by(self:      "Stream[Tuple[Y,Z]]",
                  *,
                  key:       Callable[[X],Tuple[Y,Z]] = ...,
-                 reduce:    Callable[[Z,Z],Z]) -> "Stream[Z]": ...
+                 reduce:    Callable[[Z,Z],Z],
+                 keep_key:  Literal[False] = ...) -> "Stream[Z]": ...
 
     @overload
     def group_by(self, 
                  *,
                  key:       Callable[[X],Tuple[Y,Z]], 
-                 reduce:    Callable[[Z,Z],Z]) -> "Stream[Z]": ...
+                 reduce:    Callable[[Z,Z],Z],
+                 keep_key:  Literal[False] = ...) -> "Stream[Z]": ...
+    
+    @overload
+    def group_by(self:      "Stream[Tuple[Y,Z]]",
+                 *,
+                 key:       Callable[[X],Tuple[Y,Z]] = ...,
+                 keep_key:  Literal[True]) -> "Stream[Tuple[Y,List[Z]]]": ...
+
+    @overload
+    def group_by(self, 
+                 *,
+                 key:       Callable[[X],Tuple[Y,Z]],
+                 keep_key:  Literal[True]) -> "Stream[Tuple[Y,List[Z]]]": ...
+
+    @overload
+    def group_by(self:      "Stream[Tuple[Y,Z]]",
+                 *,
+                 key:       Callable[[X],Tuple[Y,Z]] = ...,
+                 reduce:    Callable[[Z,Z],Z],
+                 keep_key:  Literal[True]) -> "Stream[Tuple[Y,Z]]": ...
+
+    @overload
+    def group_by(self, 
+                 *,
+                 key:       Callable[[X],Tuple[Y,Z]], 
+                 reduce:    Callable[[Z,Z],Z],
+                 keep_key:  Literal[True]) -> "Stream[Tuple[Y,Z]]": ...
         
     def group_by(self, 
+                 *,
                  key:       Callable[[X],Tuple[Y,Z]]|None = None,
-                 reduce:    Callable[[Z,Z],Z]|None = None) -> "Stream[List[Z]|Z]":
+                 reduce:    Callable[[Z,Z],Z]|None = None,
+                 keep_key:  bool = False) -> "Stream[Tuple[Y,List[Z]|Z]|List[Z]|Z]":
+        
+        stream = Stream(self.dict(key=key, reduce=reduce).items()) # type: ignore
 
-        return Stream(self.dict(key=key, reduce=reduce)).map(lambda key_value: key_value[1]) # type: ignore
+        if keep_key:
+            return stream
+        else: 
+            return stream.map(lambda key_value: key_value[1])
 
     def all(self, f: Callable[[X],bool]) -> bool:
         return all(f(x) for x in self)
@@ -255,7 +292,7 @@ class Stream(Iterable[X], Generic[X]):
                         y,z = x
                         key_list_z.setdefault(y, []).append(z)
                     else:
-                        raise TypeError("Implicit dict construction failed. Expected Stream[Tuple[Y,X]] if key is not provided.")
+                        raise TypeError(f"Implicit dict construction failed. Expected Stream[Tuple[Y,Z]] if key is not provided, but stream element type was: {type(x)}")
             else:
                 for x in self:
                     y,z = key(x)
@@ -274,7 +311,7 @@ class Stream(Iterable[X], Generic[X]):
                         else:
                             key_z[y] = reduce(z1, z2)
                     else:
-                        raise TypeError("Implicit dict construction failed. Expected Stream[Tuple[Y,X]] if key is not provided.")
+                        raise TypeError(f"Implicit dict construction failed. Expected Stream[Tuple[Y,Z]] if key is not provided, but stream element type was: {type(x)}")
             else:
                 for x in self:
                     y,z2 = key(x)
