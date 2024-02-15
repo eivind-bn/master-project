@@ -134,9 +134,11 @@ class Population(Generic[T]):
                 step += 1
                 action = genome.predict(observation)
                 observation, rewards = env.step(action)
+
                 if random.random() < 0.2:
                     observations.append(observation)
-                fitness += Fitness(rewards={"game_score": sum(reward.value for reward in rewards)})
+
+                fitness += Fitness(rewards={reward.name:reward.value for reward in rewards})
 
         return fitness, tuple(observations)
 

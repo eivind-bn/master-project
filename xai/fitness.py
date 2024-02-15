@@ -86,12 +86,23 @@ class Fitness:
         return Stream(fitnesses).map(lambda fitness: (fitness - min).safe_divide(difference, 0.0))
     
     @staticmethod
-    def product_score(fitnesses: Sequence["Fitness"]) -> Tuple[float,...]:
-        ranks: List[float] = []
-        for fitness in Fitness.normalize(fitnesses):
-            ranks.append(fitness.rewards().reduce(1.0, lambda z,kv: z*kv[1]) * fitness.penalties().reduce(1.0, lambda z,kv: z*(1.0 - kv[1])))
+    def product_score(fitnesses: Sequence["Fitness"]) -> Stream[float]:
+        def iterator() -> Iterator[float]:
+            for fitness in fitnesses:
+                reward_prod = fitness.rewards().reduce(1.0, lambda z,kv: z*kv[1])
+                penalty_prod = fitness.penalties().reduce(1.0, lambda z,kv: z*(1.0 - kv[1]))
+                yield reward_prod * penalty_prod
 
-        return tuple(ranks)
+        return Stream(iterator())
+    
+    @staticmethod
+    def euclidean_score(fitnesses: Sequence["Fitness"], order: float = 2.0) -> Stream[float]:
+        def iterator() -> Iterator[float]:
+            for fitness in fitnesses:
+                reward_euclidean = fitness.rewards().map(lambda kv: (kv[1] - 1)**order).reduce(0.0, lambda y,x: y+x)
+                penalty_euclidean = fitness.penalties().map(lambda kv: (kv[1] - 1)**order).reduce(0.0, lambda y,x: y+x)
+
+        return Stream(iterator())
 
     def __repr__(self) -> str:
         return str(dict(
