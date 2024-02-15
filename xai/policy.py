@@ -2,12 +2,13 @@ from typing import *
 from abc import ABC
 from dataclasses import dataclass
 from torch import Tensor
-from torch.nn import Sequential
+from torch.nn import Sequential, Parameter
 from numpy.typing import NDArray
 from numpy import float32, ndarray
 from .feed_forward import FeedForward
 from .optimizer import SGD, Adam, RMSprop
 from .activation import Activation, ActivationModule
+from .stream import Stream
 
 import torch
 import copy
@@ -87,7 +88,7 @@ class Policy(ABC):
             output=Y
         )
     
-    def mutate(self, volatility: float, rate: float|None = None) -> None:
+    def mutate(self, volatility: float, rate: float|None) -> None:
         for params in self.network.parameters():
             with torch.no_grad():
                 if rate is None:
@@ -98,23 +99,21 @@ class Policy(ABC):
 
     @staticmethod
     def crossover(policies: Sequence["Policy"], weights: Sequence[int|float]) -> "Policy":
-        assert len(policies) == len(weights)
-        weight_sum = sum(weights)
-        weight_portions = tuple(weight/weight_sum for weight in weights)
+        assert len(policies) == len(weights) and policies
+        total = sum(weights)
+        weight_portions = Stream(weights).map(lambda w: w/total).tuple()
 
-        new_policy: Policy|None = None
+        result = policies[0].copy()
 
-        for policy,weight_portion in zip(policies,weight_portions, strict=True):
-            with torch.no_grad():
-                if new_policy is None:
-                    new_policy = policy.copy()
-                    for param in new_policy.network.parameters():
-                        param[:] = 1.0
+        with torch.no_grad():
+            for params in result:
+                params[:] = 0.0
 
-                for param,new_param in zip(policy.network.parameters(), new_policy.network.parameters()):
-                    new_param[:] = rank_portion*param
+            for policy,weight_portion in zip(policies,weight_portions, strict=True):
+                for result_param, policy_param in zip(result, policy):
+                    result_param[:] = policy_param*weight_portion
 
-        return new_policy
+        return result
             
     def save(self, path: str) -> None:
         torch.save(self, path)
@@ -212,6 +211,9 @@ class Policy(ABC):
             normalize=normalize,
             detach=detach
         )
+    
+    def __iter__(self) -> Iterator[Parameter]:
+        return iter(self.network.parameters())
     
     def __repr__(self) -> str:
         return str(self.network)

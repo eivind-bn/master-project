@@ -13,7 +13,7 @@ class Agent(ABC):
         self.stats: Dict[str,Any] = {}
 
     @abstractmethod
-    def predict(self, observation: Observation) -> Action:
+    def predict(self, observations: Sequence[Observation]) -> Sequence[Action]:
         pass
 
     def save(self, path: str) -> None:

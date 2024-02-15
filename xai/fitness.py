@@ -10,36 +10,47 @@ class Fitness:
         
         self._rewards = {} if rewards is None else rewards
         self._penalties = {} if penalties is None else penalties
-    
-    def _reduce(self, other: "Fitness|int|float", op: Callable[[int|float,int|float],int|float]) -> "Fitness":
-        if isinstance(other, Fitness):
-            return Fitness(
-                rewards=self.rewards().chain(other.rewards()).dict(reduce=lambda z1,z2: op(z1,z2)),
-                penalties=self.penalties().chain(other.penalties()).dict(reduce=lambda z1,z2: op(z1,z2))
-            )
-        else:
-            return Fitness(
-                rewards=self.rewards().map(lambda kv: (kv[0], op(kv[1], other))).dict(reduce=lambda z1,z2: z1+z2),
-                penalties=self.penalties().map(lambda kv: (kv[0], op(kv[1], other))).dict(reduce=lambda z1,z2: z1+z2)
-            )
 
-    def __add__(self, other: "Fitness|int|float") -> "Fitness":
-        return self._reduce(other, lambda x,y: x+y)
+    def _compute(self,
+                 operands:      "Iterable[Fitness|int|float]", 
+                 operator:      Callable[[int|float,int|float],int|float],
+                 inplace:       bool = False) -> "Fitness":
+        
+        result = self if inplace else self.copy()
+
+        for operand in operands:
+            if isinstance(operand, Fitness):
+                for key,value in operand.rewards():
+                    result._rewards[key] = operator(result._rewards.get(key, 0.0), value)
+
+                for key,value in operand.penalties():
+                    result._penalties[key] = operator(result._penalties.get(key, 0.0), value)
+            else:
+                for key,value in result.rewards():
+                    result._rewards[key] = operator(value, operand)
+
+                for key,value in result.penalties():
+                    result._penalties[key] = operator(value, operand)
+
+        return result
+
+    def __add__(self, operand: "Fitness|int|float") -> "Fitness":
+        return self._compute((operand,), lambda x,y: x+y)
     
-    def __sub__(self, other: "Fitness|int|float") -> "Fitness":
-        return self._reduce(other, lambda x,y: x-y)
+    def __sub__(self, operand: "Fitness|int|float") -> "Fitness":
+        return self._compute((operand,), lambda x,y: x-y)
     
-    def __mul__(self, other: "Fitness|int|float") -> "Fitness":
-        return self._reduce(other, lambda x,y: x*y)
+    def __mul__(self, operand: "Fitness|int|float") -> "Fitness":
+        return self._compute((operand,), lambda x,y: x*y)
     
-    def __truediv__(self, other: "Fitness|int|float") -> "Fitness":
-        return self._reduce(other, lambda x,y: x/y)
+    def __truediv__(self, operand: "Fitness|int|float") -> "Fitness":
+        return self._compute((operand,), lambda x,y: x/y)
     
-    def __pow__(self, other: "Fitness") -> "Fitness":
-        return self._reduce(other, lambda x,y: x**y)
+    def __pow__(self, operand: "Fitness|int|float") -> "Fitness":
+        return self._compute((operand,), lambda x,y: x**y)
     
-    def safe_divide(self, other: "Fitness", neutral_element: float) -> "Fitness":
-        return self._reduce(other, lambda x,y: x/y if y != 0.0 else neutral_element)
+    def safe_divide(self, operand: "Fitness", neutral_element: float) -> "Fitness":
+        return self._compute((operand,), lambda x,y: x/y if y != 0.0 else neutral_element)
 
     def rewards(self) -> Stream[Tuple[str,float]]:
         return Stream(self._rewards.items())
@@ -49,34 +60,26 @@ class Fitness:
     
     def categories(self) -> Stream[Tuple[str,float]]:
         return self.rewards().chain(self.penalties())
+    
+    def copy(self) -> "Fitness":
+        return Fitness(
+            rewards=self._rewards.copy(),
+            penalties=self._penalties.copy()
+        )
 
     @staticmethod
     def min(fitnesses: Sequence["Fitness"]) -> "Fitness":
-        return Fitness(
-            rewards=dict(Stream(fitnesses)
-                     .flatmap(lambda fitness: fitness.rewards())
-                     .group_by(keep_key=True)
-                     .map(lambda kr: (kr[0], min(kr[1]) if len(kr[1]) == len(fitnesses) else min(min(kr[1]), 0.0)))),
-
-            penalties=dict(Stream(fitnesses)
-                           .flatmap(lambda fitness: fitness.penalties())
-                           .group_by(keep_key=True)
-                           .map(lambda kp: (kp[0], min(kp[1]) if len(kp[1]) == len(fitnesses) else min(min(kp[1]), 0.0)))),
-        )
+        if fitnesses:
+            return Fitness._compute(fitnesses[0], fitnesses[1:], lambda x,y: min(x,y))
+        else:
+            return Fitness()
     
     @staticmethod
     def max(fitnesses: Sequence["Fitness"]) -> "Fitness":
-        return Fitness(
-            rewards=dict(Stream(fitnesses)
-                     .flatmap(lambda fitness: fitness.rewards())
-                     .group_by(keep_key=True)
-                     .map(lambda kr: (kr[0], max(kr[1]) if len(kr[1]) == len(fitnesses) else max(max(kr[1]), 0.0)))),
-
-            penalties=dict(Stream(fitnesses)
-                           .flatmap(lambda fitness: fitness.penalties())
-                           .group_by(keep_key=True)
-                           .map(lambda kp: (kp[0], max(kp[1]) if len(kp[1]) == len(fitnesses) else max(max(kp[1]), 0.0)))),
-        )
+        if fitnesses:
+            return Fitness._compute(fitnesses[0], fitnesses[1:], lambda x,y: max(x,y))
+        else:
+            return Fitness()
     
     @staticmethod
     def normalize(fitnesses: Sequence["Fitness"]) -> Stream["Fitness"]:
@@ -88,19 +91,31 @@ class Fitness:
     @staticmethod
     def product_score(fitnesses: Sequence["Fitness"]) -> Stream[float]:
         def iterator() -> Iterator[float]:
-            for fitness in fitnesses:
-                reward_prod = fitness.rewards().reduce(1.0, lambda z,kv: z*kv[1])
-                penalty_prod = fitness.penalties().reduce(1.0, lambda z,kv: z*(1.0 - kv[1]))
-                yield reward_prod * penalty_prod
+            for fitness in Fitness.normalize(fitnesses):
+                reward_score = fitness.rewards().reduce(1.0, lambda z,kv: z*kv[1])
+                penalty_score = fitness.penalties().reduce(1.0, lambda z,kv: z*(1.0 - kv[1]))
+                yield reward_score * penalty_score
 
         return Stream(iterator())
     
     @staticmethod
-    def euclidean_score(fitnesses: Sequence["Fitness"], order: float = 2.0) -> Stream[float]:
+    def deviation_score(fitnesses: Sequence["Fitness"]) -> Stream[float]:
         def iterator() -> Iterator[float]:
-            for fitness in fitnesses:
-                reward_euclidean = fitness.rewards().map(lambda kv: (kv[1] - 1)**order).reduce(0.0, lambda y,x: y+x)
-                penalty_euclidean = fitness.penalties().map(lambda kv: (kv[1] - 1)**order).reduce(0.0, lambda y,x: y+x)
+            deviations: List[float] = []
+            for fitness in Fitness.normalize(fitnesses):
+                reward = fitness.rewards().reduce(0.0, lambda y,x: y+(1-x[1])**2)
+                penalty = fitness.penalties().reduce(0.0, lambda y,x: y+x[1]**2)
+                deviations.append(abs(reward + penalty))
+
+            min,max = Stream(deviations).min_max(default=0.0)
+
+            difference = max - min
+            if difference == 0.0:
+                for score in deviations:
+                    yield 1 - (score - min)
+            else:
+                for score in deviations:
+                    yield 1 - ((score - min)/difference)
 
         return Stream(iterator())
 

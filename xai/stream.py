@@ -179,7 +179,7 @@ class Stream(Iterable[X], Generic[X]):
     @overload
     def min(self,
             default:    Y,
-            key:        Callable[[X|Y],int|float] = ...) -> X|Y: ...
+            key:        Callable[[X|Y],int|float]) -> X|Y: ...
     
     def min(self, 
             default:    Y,
@@ -200,13 +200,45 @@ class Stream(Iterable[X], Generic[X]):
     @overload
     def max(self,
             default:    Y,
-            key:        Callable[[X],int|float] = ...) -> X|Y: ...
+            key:        Callable[[X],int|float]) -> X|Y: ...
     
     def max(self, 
             default:    Y,
             key:        Callable[[X],int|float]|None = None) -> X|Y:
         
         return max(self, key=cast(Callable[[X|Y],int|float], key), default=default)
+    
+    @overload
+    def min_max(self:       "Stream[int]",
+                default:    Y,
+                key:        Callable[[X],int|float] = ...) -> Tuple[X|Y,X|Y]: ...
+    
+    @overload
+    def min_max(self:       "Stream[float]",
+                default:    Y,
+                key:        Callable[[X],int|float] = ...) -> Tuple[X|Y,X|Y]: ...
+    
+    @overload
+    def min_max(self,
+                default:    Y,
+                key:        Callable[[X],int|float]) -> Tuple[X|Y,X|Y]: ...
+    
+    def min_max(self, 
+                default:    Y,
+                key:        Callable[[X],int|float]|None = None) -> Tuple[X|Y,X|Y]:
+        
+        iterator = iter(self)
+        try:
+            x = next(iterator)
+            min_x, max_x = x, x
+        except StopIteration:
+            return default, default
+        
+        for x in iterator:
+            min_x = min(x, min_x, key=cast(Callable[[X|Y],int|float], key))
+            max_x = max(x, max_x, key=cast(Callable[[X|Y],int|float], key))
+
+        return min_x, max_x
     
     def scan(self, start: Y, scanner: Callable[[Y,X],Y]) -> "Stream[Y]":
         def iterator() -> Iterator[Y]:   

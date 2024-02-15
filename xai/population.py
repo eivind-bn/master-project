@@ -1,9 +1,10 @@
 from typing import *
 from tqdm import tqdm
+from collections import deque
 
 from .agent import Agent
 from .stream import Stream
-from .fitness import NormalizedFitness, Fitness
+from .fitness import Fitness
 from .buffer import Buffer
 from .bytes import Memory
 from .asteroids import Asteroids
@@ -11,6 +12,7 @@ from .cache import Cache
 from .observation import Observation
 from .bytes import GigaBytes
 from .policy import Policy
+from .action import Actions
 
 import random
 import multiprocessing as mp
@@ -75,6 +77,8 @@ class Population(Generic[T]):
                 for genome in self._genomes:
                     yield genome
                     bar.update()
+
+        population_size = self._genomes.entry_size()
         
         with mp.Pool(processes=number_of_processes) as pool:
             for generation in range(generations):
@@ -85,15 +89,12 @@ class Population(Generic[T]):
                     fitnesses.append(fitness)
                     self._observations = self._observations.extended(observations)
 
-                weights = Fitness.product_score(fitnesses)
+                weights = Fitness.deviation_score(fitnesses).tuple()
 
-                rankings = Stream(weights).enumerate().sort(key=lambda t: t[1]).tuple()
-                if rankings:
-                    worst = rankings[0]
-                    best = rankings[1]
+                worst_to_best = Stream(weights).zip(fitnesses).sort(key=lambda wf: wf[0]).map(lambda wf: wf[1]).tuple()
 
-                    print(f"Worst: {worst}")
-                    print(f"Best: {best}")
+                print(f"Worst: {worst_to_best[0]}")
+                print(f"Best: {worst_to_best[-1]}")
 
                 survivors_idx = self.selection("Elitism", weights).take(survivors_cnt)
 
@@ -105,19 +106,14 @@ class Population(Generic[T]):
                 parents_idx = elites_idx + roulettes_idx + randoms_idx + ranks_idx
 
                 def breed() -> Iterator[T]:
-                    p1, p2, = self._genomes[random.choices(parents_idx, k=2)]
-                    offspring = p1.breed(p2)
-                    yield offspring
+                    while True:
+                        p1, p2, = self._genomes[random.choices(parents_idx, k=2)]
+                        offspring = p1.__class__(parents=(p1,p2))
+                        yield offspring
 
-                old_population_idx = range(self._genomes.entry_size())
+                self._genomes = self._genomes.new_like((self._genomes[survivors_idx] + breed()).take(population_size))
 
-                self._genomes.extended(
-                    other=self._genomes[survivors_idx] + Stream(breed()).take(len(old_population_idx)),
-                    eviction_policy="Throw",
-                    verbose=True
-                )
-
-                self._genomes.remove(old_population_idx)
+                assert self._genomes.entry_size() == population_size, f"New population size of {self._genomes.entry_size()} is incorrect."
         
     @staticmethod
     def eval_fitness(genome: T) -> Tuple[Fitness,Tuple[Observation,...]]:
@@ -127,20 +123,22 @@ class Population(Generic[T]):
         env: Asteroids = globals()["env"]
         step = 0
         fitness = Fitness()
-        observations: List[Observation] = []
+        recordings: List[Observation] = []
         for episode in range(3):
             observation, rewards = env.reset()
+            fitness += Fitness(rewards={reward.name:reward.value for reward in rewards})
+
             while step < 3000 and env.running():
                 step += 1
-                action = genome.predict(observation)
-                observation, rewards = env.step(action)
+                actions = genome.predict((observation,))
+                for action in actions:
+                    observation, rewards = env.step(action)
+                    fitness += Fitness(rewards={reward.name:reward.value for reward in rewards})
 
-                if random.random() < 0.2:
-                    observations.append(observation)
+                    if random.random() < 0.2:
+                        recordings.append(observation)
 
-                fitness += Fitness(rewards={reward.name:reward.value for reward in rewards})
-
-        return fitness, tuple(observations)
+        return fitness, tuple(recordings)
 
     @overload
     def selection(self, policy: SelectionPolicy, weights: Sequence[int|float]) -> Stream[int]: ...
