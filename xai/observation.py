@@ -49,13 +49,13 @@ class Observation:
 
     def numpy(self, normalize: bool) -> NDArray[np.uint8|np.float32]:
         if normalize:
-            if self.rendering is None:
-                self.rendering = self.spaceship|self.asteroids
-            return self.rendering
-        else:
             if self.normalized_rendering is None:
                 self.normalized_rendering = np.array(self.spaceship|self.asteroids, dtype=np.float32)/255.0
             return self.normalized_rendering
+        else:
+            if self.rendering is None:
+                self.rendering = self.spaceship|self.asteroids
+            return self.rendering
         
     @overload
     def tensor(self, normalize: Literal[False], device: Device) -> IntTensor: ...

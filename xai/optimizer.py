@@ -9,6 +9,7 @@ from torch.optim import Optimizer as TorchOptimizer
 from .loss import LossModule, Loss
 from .feed_forward import FeedForward
 from .stats import TrainStats
+from .buffer import Buffer
 
 import torch
 
@@ -65,15 +66,15 @@ class Optimizer(ABC):
         return self._optimizer
 
     def fit(self, 
-            X:              Tensor|ndarray|FeedForward|Sequence[Tensor], 
-            Y:              Tensor|ndarray|FeedForward|Sequence[Tensor], 
+            X:              Tensor|ndarray|FeedForward|Sequence[Tensor]|Iterable[Tensor], 
+            Y:              Tensor|ndarray|FeedForward|Sequence[Tensor]|Iterable[Tensor], 
             epochs:         int, 
             batch_size:     int,
             loss_criterion: Loss,
             verbose:        bool = False,
             info:           str|None = None) -> TrainStats:
         
-        def get_index_access_function(array: Tensor|ndarray|FeedForward|Sequence[Tensor]) -> Tuple[int, Callable[[Tensor],Tensor]]:
+        def get_index_access_function(array: Tensor|ndarray|FeedForward|Sequence[Tensor]|Iterable[Tensor]) -> Tuple[int, Callable[[Tensor],Tensor]]:
             if isinstance(array, FeedForward):
                 tensor = array.tensor(True).to(device=self._policy.device, dtype=torch.float32)
                 return tensor.shape[0], lambda indices: tensor[indices]
@@ -83,6 +84,15 @@ class Optimizer(ABC):
             elif isinstance(array, Tensor):
                 tensor = array.to(device=self._policy.device, dtype=torch.float32)
                 return array.shape[0], lambda indices: array[indices]
+            elif isinstance(array, Iterable):
+                iterator = iter(array)
+                def access(indices: Tensor) -> Tensor:
+                    tensors: List[Tensor] = []
+                    for _,tensor in zip(indices, iterator):
+                        tensors.append(tensor)
+                    return torch.stack(tensors).to(device=self._policy.device, dtype=torch.float32)
+                
+                return batch_size, access
             else:
                 def access(indices: Tensor) -> Tensor:
                     indices_list: List[int] = indices.tolist()

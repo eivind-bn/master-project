@@ -49,10 +49,12 @@ class Buffer(Stream[T], Generic[T]):
             "Throw": throw_evict
         }
 
+        self._eviction_policy = eviction_policy
         self._evict = self._eviction_policies[eviction_policy]
         self._use_ram = use_ram
         self._max_memory = max_memory
         self._max_entries = max_entries
+        self._verbose = verbose
         self._entries: List[Cache[T]] = []
 
         self.extend(entries, verbose=verbose)
@@ -140,30 +142,50 @@ class Buffer(Stream[T], Generic[T]):
         )
         return buffer
     
+    def new_like(self, entries: Iterable[Cache[T]|T]) -> "Buffer[T]":
+        return Buffer(
+            entries=entries,
+            eviction_policy=self._eviction_policy,
+            use_ram=self._use_ram,
+            max_memory=self._max_memory,
+            max_entries=self._max_entries,
+            verbose=self._verbose
+        )
+    
     @overload
     def pop(self, loc: int) -> T: ...
 
     @overload
-    def pop(self, loc: Iterable[int]) -> Stream[T]: ...
+    def pop(self, loc: Sequence[int]) -> Stream[T]: ...
 
-    def pop(self, loc: int|Iterable[int]) -> T|Stream[T]:
-        if isinstance(loc, Iterable):
+    def pop(self, loc: int|Sequence[int]) -> T|Stream[T]:
+        if isinstance(loc, Sequence):
+            keep_flags = [True]*self.entry_size()
+            for index in loc:
+                keep_flags[index] = False
+
+            keep_list: List[Cache[T]] = []
+            pop_list: List[Cache[T]] = []
+            
+            for i,keep in enumerate(keep_flags):
+                if keep:
+                    keep_list.append(self._entries[i])
+                else:
+                    pop_list.append(self._entries[i])
+
             def loader() -> Iterator[T]:
-                for index in loc:
-                    with self._entries.pop(index) as data:
+                for pop_item in pop_list:
+                    with pop_item as data:
                         yield data
 
+            self._entries = keep_list
             return Stream(loader())
         else:
-            with self._entries.pop(loc) as data:
+            with self._entries[loc] as data:
                 return data
             
-    def remove(self, loc: int|Iterable[int]) -> None:
-        if isinstance(loc, Iterable):
-            for index in loc:
-                self._entries.pop(index)
-        else:
-            self._entries.pop(loc)
+    def remove(self, loc: int|Sequence[int]) -> None:
+        self.pop(loc)
 
     def replace(self, 
                 entries:            Iterable[Tuple[int,Cache[T]|T]],
