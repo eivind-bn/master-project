@@ -220,10 +220,15 @@ class Buffer(Stream[T], Generic[T]):
         except EntryRejection:
             pass
 
-    def copy(self) -> Self:
-        buffer = copy.copy(self)
-        buffer._entries = self._entries.copy()
-        return buffer
+    def copy(self) -> "Buffer[T]":
+        return Buffer(
+            entries=self._entries.copy(),
+            eviction_policy=self._eviction_policy,
+            use_ram=self.use_ram,
+            max_memory=self.max_memory,
+            max_entries=self.max_entries,
+            verbose=self._verbose
+        )
     
     def clear(self) -> None:
         self._entries.clear()

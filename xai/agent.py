@@ -2,6 +2,9 @@ from typing import *
 from abc import ABC, abstractmethod
 from .observation import Observation
 from .action import Action
+from .window import Window
+from .record import Recorder
+from .asteroids import Asteroids
 
 import dill
 import copy
@@ -32,4 +35,35 @@ class Agent(ABC):
             return dqn
         else:
             raise TypeError(f"Invalid type: {type(dqn)}")
+        
+    def play(self, rounds: int|None = None, record_path: str|None = None) -> None:
+        with Window("Asteroids", fps=60, scale=4) as window:
+            with Recorder(filename=record_path) as recorder:
+                env = Asteroids()
+                if rounds is None:
+                    while True:
+                        observation,rewards = env.reset()
+                        while env.running():
+                            actions = self.predict([observation])
+                            for action in actions:
+                                observation,rewards = env.step(action)
+                                image = observation.numpy(normalize=False)
+                                recorder(image)
+                                window.update(image).match({
+                                    "q": lambda: window.break_window()
+                                })
+                else:
+                    for round in range(rounds):
+                        observation,rewards = env.reset()
+                        while env.running():
+                            actions = self.predict([observation])
+                            for action in actions:
+                                observation,rewards = env.step(action)
+                                image = observation.numpy(normalize=False)
+                                recorder(image)
+                                window.update(image).match({
+                                    "q": lambda: window.break_window()
+                                })
+
+
         
