@@ -87,7 +87,7 @@ class Population(Generic[T]):
                     
                 for fitness,observations in pool.imap(self.eval_fitness, loader(f"Generation: {generation}/{generations}")):
                     fitnesses.append(fitness)
-                    self._observations = self._observations.extended(observations)
+                    self._observations.extend(observations)
 
                 weights = Fitness.deviation_score(fitnesses).tuple()
 

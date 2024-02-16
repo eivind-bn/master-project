@@ -1,4 +1,5 @@
 from typing import *
+from dataclasses import dataclass
 from torch import Tensor
 from collections import deque
 from .agent import Agent
@@ -12,6 +13,7 @@ from .bytes import Memory
 from .buffer import Buffer
 from .stream import Stream
 from .asteroids import Asteroids
+from .genotype import GenoType
 
 import random
 import torch
@@ -27,15 +29,21 @@ class Genome(Agent):
     @overload
     def __init__(self,
                  *,
-                 translate: bool, 
-                 rotate:    bool) -> None: ...
+                 translate:         bool, 
+                 rotate:            bool,
+                 volatility:        float,
+                 mutation_rate:     float = ...,
+                 head_output_dim:   int = ...) -> None: ...
 
     def __init__(self,
                  *,
-                 parents:   Sequence[Self]|None = None,
-                 translate: bool|None = None, 
-                 rotate:    bool|None = None,
-                 weights:   Sequence[int|float]|None = None) -> None:
+                 parents:           Sequence[Self]|None = None,
+                 translate:         bool|None = None, 
+                 rotate:            bool|None = None,
+                 weights:           Sequence[int|float]|None = None,
+                 volatility:        float|None = None,
+                 mutation_rate:     float = 1.0,
+                 head_output_dim:   int = 64) -> None:
         super().__init__()
 
         self.stats: Dict[str,Any] = {}
@@ -49,12 +57,28 @@ class Genome(Agent):
         )
 
         if parents is None:
-            assert translate is not None and rotate is not None
+            assert translate is not None and rotate is not None and volatility is not None
             self._translate = translate
             self._rotate = rotate
+
+            self._mutation_rate = GenoType(
+                value=mutation_rate,
+                min_value=0.0,
+                max_value=1.0,
+                volatility=1.0,
+                min_volatility=0.0
+            )
+
+            self._volatility = GenoType(
+                value=volatility,
+                min_value=0.0,
+                volatility=1.0,
+                min_volatility=0.0
+            )
+
             self._head = Policy.new(
                 input_dim=Asteroids.observation_shape,
-                output_dim=64,
+                output_dim=head_output_dim,
                 hidden_layers=0,
                 device="cpu"
                 )
@@ -69,15 +93,21 @@ class Genome(Agent):
 
             parent_heads = Stream(parents).map(lambda p: p._head).tuple()
             parent_tails = Stream(parents).map(lambda p: p._tail).tuple()
+            parent_mutation_rates = Stream(parents).map(lambda p: p._mutation_rate).tuple()
+            parent_volatilities = Stream(parents).map(lambda p: p._volatility).tuple()
             
             if weights is None:
                 weights = Stream(random.random).take(len(parent_tails)).tuple()
 
             self._head = Policy.crossover(parent_heads, weights)
             self._tail = Policy.crossover(parent_tails, weights)
-            
-            self._head.mutate(0.4, rate=None)
-            self._tail.mutate(0.4, rate=None) 
+            self._mutation_rate = GenoType.crossover(parent_mutation_rates, weights)
+            self._volatility = GenoType.crossover(parent_volatilities, weights)
+
+            self._mutation_rate.mutate(self._mutation_rate.value)
+            self._volatility.mutate(self._mutation_rate.value)
+            self._head.mutate(self._volatility.value, self._mutation_rate.value)
+            self._tail.mutate(self._volatility.value, self._mutation_rate.value) 
 
     def transform_observation(self, observation: Observation) -> Tensor:
         if self._translate:
