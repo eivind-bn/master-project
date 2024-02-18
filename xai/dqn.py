@@ -4,7 +4,7 @@ from numpy.typing import NDArray
 from numpy import uint8
 from torch import Tensor
 from tqdm import tqdm
-from .policy import Policy
+from .policy import Device, Policy
 from .action import Actions, Action
 from .asteroids import Asteroids
 from .window import Window, WindowClosed
@@ -16,17 +16,25 @@ from .feed_forward import FeedForward
 from .step import Step
 from .optimizer import Adam
 from .agent import Agent
+from .stream import Stream
+from .buffer import Buffer
+from .bytes import GigaBytes, Memory
 
 import torch
 import random
 import numpy as np
+import copy
 
 class DQN(Agent):
 
-    def __init__(self, translate: bool, rotate: bool) -> None:
+    def __init__(self, device: Device, translate: bool, rotate: bool) -> None:
         super().__init__()
         self._translate = translate
         self._rotate = rotate
+        if device == "auto":
+            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self._device = torch.device(device)
         self._actions = (
             Actions.NOOP,
             Actions.UP,
@@ -34,37 +42,66 @@ class DQN(Agent):
             Actions.RIGHT,
             Actions.FIRE,
         )
-        hidden_layers = [2**8,2**6,2**4]
-        self._encoder = Policy.new(
-            input_dim=Asteroids.observation_shape,
-            output_dim=10,
-            hidden_layers=hidden_layers
-            )
-        self._decoder = Policy.new(
-            input_dim=self._encoder.output_dim,
-            output_dim=Asteroids.observation_shape,
-            hidden_layers=hidden_layers[::-1],
-            )
-        self._policy = Policy.new(
-            input_dim=self._encoder.output_dim,
-            output_dim=len(self._actions)
-            )
-        self.device = self._policy.device
+        self._policy = torch.nn.Sequential(
+            torch.nn.Conv2d(in_channels=3, out_channels=8, kernel_size=(3,3), stride=(1,1)), # (102, 76)
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(in_channels=8, out_channels=16, kernel_size=(5,5), stride=(2,2)), # (107, 76)
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(in_channels=16, out_channels=32, kernel_size=(7,7), stride=(3,3)),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(in_channels=32, out_channels=64, kernel_size=(7,7), stride=(4,4)),
+            torch.nn.ReLU(),
+
+            torch.nn.Flatten(start_dim=1),
+
+            torch.nn.Linear(in_features=64*7*5, out_features=32*7*5),
+            torch.nn.ReLU(),
+            torch.nn.Linear(in_features=32*7*5, out_features=16*7*5),
+            torch.nn.ReLU(),
+            torch.nn.Linear(in_features=16*7*5, out_features=len(self._actions)),
+        ).to(device=self._device)
+
+    @overload
+    def state(self, observation: Observation, to_tensor: Literal[False]) -> NDArray[np.float32]: ...
+
+    @overload
+    def state(self, observation: Observation, to_tensor: Literal[True]) -> Tensor: ...
         
-    def state(self, observation: Observation) -> NDArray[np.float32]:
+    def state(self, observation: Observation, to_tensor: bool) -> NDArray[np.float32]|Tensor:
         if self._translate:
             observation = observation.translated()
 
         if self._rotate:
             observation = observation.rotated()
 
-        return observation.numpy(normalize=True)
-        
-    def Q(self, observation: Observation) -> Tensor:
-        return (self._encoder + self._policy).predict(self.state(observation)).tensor()
+        if to_tensor:
+            return observation.tensor(normalize=True, device=self._device)
+        else:
+            return observation.numpy(normalize=True)
 
-    def predict(self, observation: Observation) -> Action:
-        return self._actions[int(self.Q(observation).argmax(dim=0))]
+    @overload 
+    def predict(self, 
+                observation: Observation, 
+                *, 
+                to_action: Literal[True] = True) -> Action: ...
+
+    @overload 
+    def predict(self, 
+                observation: Observation, 
+                *,
+                to_action: Literal[False] = ...) -> Tensor: ...
+
+    def predict(self, 
+                observation: Observation, 
+                *,
+                to_action: bool = True) -> Action|Tensor:
+        q_values: Tensor = self._policy(self.state(observation, to_tensor=True).movedim(2,0).unsqueeze(0)).squeeze(0)
+
+        if to_action:
+            return self._actions[int(q_values.argmax(dim=0).item())]
+        else:
+            return q_values
+
     
     @overload
     def rollout(self,
@@ -115,53 +152,43 @@ class DQN(Agent):
         else:
             return None
 
-
-    def train_autoencoder(self, 
-                          buffer_size:  int, 
-                          time_steps:   int, 
-                          episodes:     int,
-                          epochs:       int,
-                          batch_size:   int,
-                          **params:     Unpack[Adam.Params]) -> None:
-        encoder, decoder = self._encoder.copy(), self._decoder.copy()
-        adam = (encoder + decoder).adam(**params)
-        env = Asteroids()
-        replay_buffer: Deque[Step] = deque(maxlen=buffer_size)
-        for episode in range(episodes):
-            self.rollout(env, time_steps, replay_buffer)
-            states = np.stack([self.state(step.observation) for step in replay_buffer])
-            adam.fit(
-                X=states,
-                Y=states,
-                epochs=epochs,
-                batch_size=batch_size,
-                loss_criterion="MSELoss",
-                verbose=True
-            )
-        self._encoder, self._decoder = encoder, decoder
-
-
     def train(self, 
-              buffer_size:  int,
               num_episodes: int,
+              update_target_frequency: int,
               epsilon:      float,
               gamma:        float,
-              steps:        int,
               batch_size:   int,
-              sample_prob:  float,
               learning_starts: float,
-              samples_per_train: float,
-              alpha:        float) -> None:
+              buffer_entry_size:  int,
+              replay_buffer_memory: Memory,
+              use_ram: bool|None = None) -> None:
         env = Asteroids()
-        replay_buffer: Deque[Tuple[Observation,Action,int,Observation]] = deque(maxlen=buffer_size)
-        policy = self._policy
-        encoder = self._encoder
-        decoder = self._decoder
-        sample_count = 0
-        learning_starts = buffer_size*learning_starts
+
+        if use_ram is None:
+            use_ram = replay_buffer_memory > GigaBytes(3.0)
         
+        replay_buffer: Buffer[Tuple[Observation,Action,int,Observation,bool]] = Buffer(
+            entries=(),
+            use_ram=use_ram,
+            eviction_policy="FIFO",
+            max_memory=replay_buffer_memory,
+            max_entries=buffer_entry_size
+        )
+        small_buffer: List[Tuple[Observation,Action,int,Observation,bool]] = []
+        huber_loss = torch.nn.SmoothL1Loss()
+
+        learning_starts = buffer_entry_size*learning_starts
+
+        policy = copy.deepcopy(self._policy)
+        optimizer = torch.optim.Adam(policy.parameters())
+
         with tqdm() as bar:
             for episode in range(num_episodes):
+                if episode % update_target_frequency == 0:
+                    self._policy = policy
+                    policy = copy.deepcopy(self._policy)
+                    optimizer = torch.optim.Adam(policy.parameters())
+
                 episode_reward = 0
                 current_observation, rewards = env.reset()
                 
@@ -177,66 +204,31 @@ class DQN(Agent):
                     reward_sum = sum(reward.value for reward in rewards)
                     episode_reward += int(reward_sum)
 
-                    if random.random() < sample_prob:
-                        replay_buffer.append((current_observation, action, reward_sum, new_observation))
-                        sample_count += 1
+                    small_buffer.append((current_observation, action, reward_sum, new_observation, env.running()))
+                    if len(small_buffer) > 300:
+                        replay_buffer.extend(entries=small_buffer, verbose=True)
+                        small_buffer.clear()
 
                     current_observation = new_observation
 
-                    if len(replay_buffer) > learning_starts and sample_count > samples_per_train:
-                        sample_count  = 0
-                        states = np.stack([self.state(entry[0]) for entry in replay_buffer])
-                        # old_q = torch.stack([self.Q(entry[0]) for entry in replay_buffer])
-                        # actions = torch.tensor([entry[1].ale_id for entry in replay_buffer], device=policy.device)
-                        # new_q = torch.stack([self.Q(entry[3]) for entry in replay_buffer])
-                        # reward_sums = torch.tensor([entry[2] for entry in replay_buffer], device=policy.device).reshape((states.shape[0],-1))
+                    if replay_buffer.entry_size() > learning_starts:
 
-                        # target_q = old_q.clone()
-                        # target_q[:,actions] = old_q[:,actions] + alpha*(reward_sums + gamma*new_q.max(dim=1)[0] - old_q[:,actions])
+                        batch = replay_buffer.randoms(with_replacement=False).take(batch_size).tuple()
 
-                        (encoder + decoder).adam().fit(
-                            X=states,
-                            Y=states,
-                            batch_size=batch_size,
-                            epochs=steps,
-                            loss_criterion="MSELoss",
-                            verbose=True
-                        )
+                        old_q = torch.stack([self.predict(entry[0], to_action=False) for entry in batch])
+                        actions = torch.nn.functional.one_hot(torch.tensor([entry[1].ale_id for entry in batch], device=self._device), num_classes=len(self._actions))
+                        reward_sums = torch.tensor([entry[2] for entry in batch], device=self._device).reshape((old_q.shape[0],-1))
+                        done = torch.tensor([int(entry[4]) for entry in batch], device=self._device).reshape((old_q.shape[0],-1))
 
-                        # policy.adam().fit(
-                        #     X=encoder.predict(states),
-                        #     Y=target_q,
-                        #     batch_size=batch_size,
-                        #     steps=steps,
-                        #     loss_criterion="HuberLoss",
-                        # )
+                        with torch.no_grad():
+                            new_q = torch.stack([self.predict(entry[3], to_action=False) for entry in batch])
 
-                bar.set_description(f"{episode=}, {len(replay_buffer)=}")
+                        target = reward_sums + torch.mul((gamma * new_q.max(1).values.unsqueeze(1)), 1 - done)
+                        current = old_q.gather(1, actions.long())
+
+                        optimizer.zero_grad()
+                        huber_loss(current, target)
+                        optimizer.step()
+
+                bar.set_description(f"{episode=}, {replay_buffer.entry_size()=}, {episode_reward=}")
                 bar.update()
-
-    def play(self, 
-             record_path:   str|None = None, 
-             show_decode:   bool = False,
-             show:          bool = False, 
-             rollout:       bool = False) -> None:
-        with Window(name=self.__class__.__name__, fps=60, scale=4.0) as window:
-            with Recorder(filename=record_path) as recorder:
-                try:
-                    autoencoder = self._encoder + self._decoder
-                    while True:
-                        env = Asteroids()
-                        observation, rewards = env.reset()
-                        while env.running():
-                            if show_decode:
-                                state = self.state(observation)
-                                recon = autoencoder.predict(state).numpy()
-                                min, max = recon.min(), recon.max()
-                                recon = ((recon - min)/(max - min))*255
-                                recon = recon.astype(np.uint8)
-                                window.update(np.hstack([state,recon]))
-                            else:
-                                window.update(observation.numpy(normalize=False))
-                            action = self.predict(observation)
-                            observation, rewards = env.step(action)
-                except WindowClosed:
-                    pass

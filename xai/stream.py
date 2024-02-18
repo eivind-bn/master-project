@@ -428,9 +428,9 @@ class Stream(Iterable[X], Generic[X]):
     def buffer(self, 
                eviction_policy: "EvictionPolicy", 
                use_ram: bool, 
-               max_memory: Memory, 
-               max_entries: int, 
-               verbose: bool) -> "Buffer[X]":
+               max_memory: Memory|None = None, 
+               max_entries: int|None = None, 
+               verbose: bool = False) -> "Buffer[X]":
         from .buffer import Buffer
         return Buffer(
             entries=self,
@@ -441,10 +441,29 @@ class Stream(Iterable[X], Generic[X]):
             verbose=verbose
         )
     
-    def save(self, path: Callable[[X], str]) -> None:
+    def save(self, obj_and_path: Callable[[X], Tuple[Y,str]]) -> None:
         for x in self:
-            with open(path(x), "wb") as file:
-                dill.dump(x, file)
+            y,path = obj_and_path(x)
+            with open(path, "wb") as file:
+                dill.dump(y, file)
+
+    def load(self, type_and_path: Callable[[X], Tuple[Type[Y],str]], raise_error: bool) -> "Stream[Y]":
+        def iterator() -> Iterator[Y]:
+            for x in self:
+                try:
+                    y_annotation, path = type_and_path(x)
+                    y_type: Type[Y] = y_annotation.mro()[0]
+                    with open(path, "rb") as file:
+                        y: Y = dill.load(file)
+                        if isinstance(y, y_type):
+                            yield y
+                        else:
+                            raise TypeError(f"Unpickled object is not of type: {y_type}, but of type: {type(y)}")
+                except Exception as e:
+                    if raise_error:
+                        raise e
+                    
+        return Stream(iterator())
 
     def drain(self) -> None:
         for _ in self:
