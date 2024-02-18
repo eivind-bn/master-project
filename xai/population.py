@@ -60,7 +60,8 @@ class Population(Generic[T]):
                random_cnt:              int,
                rank_cnt:                int,
                checkpoints_directory:   str|None,
-               number_of_processes:     int) -> None:
+               number_of_processes:     int,
+               save_interval:           int = 3) -> None:
         
         torch.set_num_threads(1)
         
@@ -71,6 +72,8 @@ class Population(Generic[T]):
                     os.mkdir(directory)
                 except FileExistsError:
                     continue
+        else:
+            save_dir = None
 
         def loader(text: str|None = None) -> Iterator[T]:
             with tqdm(total=self._genomes.entry_size(), desc=text) as bar:
@@ -92,6 +95,11 @@ class Population(Generic[T]):
                 weights = Fitness.deviation_score(fitnesses).tuple()
 
                 worst_to_best = Stream(weights).zip(fitnesses).sort(key=lambda wf: wf[0]).map(lambda wf: wf[1]).tuple()
+                best_genome_idx = Stream(weights).enumerate().max(None, lambda iw: iw[0])
+
+                if generation % save_interval == 0 and best_genome_idx is not None and save_dir is not None:
+                    file_path = os.path.join(save_dir, f"genome{generation}")
+                    self._genomes[best_genome_idx[0]].foreach(lambda genome: genome.save(file_path))
 
                 print(f"Worst: {worst_to_best[0]}")
                 print(f"Best: {worst_to_best[-1]}")

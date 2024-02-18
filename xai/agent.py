@@ -36,9 +36,9 @@ class Agent(ABC):
         else:
             raise TypeError(f"Invalid type: {type(dqn)}")
         
-    def play(self, rounds: int|None = None, record_path: str|None = None) -> None:
-        with Window("Asteroids", fps=60, scale=4) as window:
-            with Recorder(filename=record_path) as recorder:
+    def play(self, rounds: int|None = None, record_path: str|None = None, scale: float = 4.0) -> None:
+        with Window("Asteroids", fps=60, scale=scale) as window:
+            with Recorder(filename=record_path, scale=scale) as recorder:
                 env = Asteroids()
                 if rounds is None:
                     while True:
@@ -50,7 +50,8 @@ class Agent(ABC):
                                 image = observation.numpy(normalize=False)
                                 recorder(image)
                                 window.update(image).match({
-                                    "q": lambda: window.break_window()
+                                    "q": lambda: window.break_window(),
+                                    None: lambda: None
                                 })
                 else:
                     for round in range(rounds):
@@ -62,7 +63,8 @@ class Agent(ABC):
                                 image = observation.numpy(normalize=False)
                                 recorder(image)
                                 window.update(image).match({
-                                    "q": lambda: window.break_window()
+                                    "q": lambda: window.break_window(),
+                                    None: lambda: None
                                 })
 
 
