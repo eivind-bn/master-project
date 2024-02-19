@@ -7,7 +7,6 @@ from .reward import Reward
 
 @dataclass(frozen=True, slots=True)
 class Step:
-    number: int
     observation: Observation
     action: Action
     rewards: Tuple[Reward,...]

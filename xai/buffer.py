@@ -55,6 +55,7 @@ class Buffer(Stream[T], Generic[T]):
         self._max_memory = max_memory
         self._max_entries = max_entries
         self._verbose = verbose
+        self._byte_size: Memory|None = None
         self._entries: List[Cache[T]] = []
 
         self.extend(entries, verbose=verbose)
@@ -72,7 +73,9 @@ class Buffer(Stream[T], Generic[T]):
         return self._max_entries
 
     def byte_size(self) -> Bytes:
-        return sum((entry.size() for entry in self._entries), start=Bytes(0))
+        if self._byte_size:
+            self._byte_size = sum((entry.size() for entry in self._entries), start=Bytes(0))
+        return self._byte_size
     
     def entry_size(self) -> int:
         return len(self._entries)
@@ -84,15 +87,25 @@ class Buffer(Stream[T], Generic[T]):
                 while True:
                     idx = random.randrange(0,N)
                     with self._entries[idx] as data:
+                        self._byte_size = None
                         yield data
             else:
                 indices = list(range(0,N))
                 while indices:
                     idx = random.randrange(0,len(indices))
                     with self._entries[indices.pop(idx)] as data:
+                        self._byte_size = None
                         yield data
 
         return Stream(iterator())
+    
+    def append(self,
+               entry:           Cache[T]|T,
+               eviction_policy: EvictionPolicy|None = None) -> None:
+        self.extend(
+            entries=(entry, ),
+            eviction_policy=eviction_policy
+        )
     
     def extend(self, 
                entries:         Iterable[Cache[T]|T], 
@@ -130,6 +143,16 @@ class Buffer(Stream[T], Generic[T]):
         except EntryRejection:
             pass
 
+        self._byte_size = byte_size
+
+    def appended(self,
+                 other:             Cache[T]|T, 
+                 eviction_policy:   EvictionPolicy|None = None) -> "Buffer[T]":
+        return self.extended(
+            other=(other,),
+            eviction_policy=eviction_policy
+        )
+
     def extended(self, 
                  other:             Iterable[Cache[T]|T], 
                  eviction_policy:   EvictionPolicy|None = None,
@@ -159,6 +182,7 @@ class Buffer(Stream[T], Generic[T]):
     def pop(self, loc: Sequence[int]) -> Stream[T]: ...
 
     def pop(self, loc: int|Sequence[int]) -> T|Stream[T]:
+        self._byte_size = None
         if isinstance(loc, Sequence):
             keep_flags = [True]*self.entry_size()
             for index in loc:
@@ -185,6 +209,7 @@ class Buffer(Stream[T], Generic[T]):
                 return data
             
     def remove(self, loc: int|Sequence[int]) -> None:
+        self._byte_size = None
         self.pop(loc)
 
     def replace(self, 
@@ -220,6 +245,8 @@ class Buffer(Stream[T], Generic[T]):
         except EntryRejection:
             pass
 
+        self._byte_size = byte_size
+
     def copy(self) -> "Buffer[T]":
         return Buffer(
             entries=self._entries.copy(),
@@ -231,6 +258,7 @@ class Buffer(Stream[T], Generic[T]):
         )
     
     def clear(self) -> None:
+        self._byte_size = None
         self._entries.clear()
 
     def __add__(self, other: Iterable[Cache[T]|T]) -> "Buffer[T]":
@@ -247,6 +275,7 @@ class Buffer(Stream[T], Generic[T]):
 
             for entry in entries:
                 with entry as data:
+                    self._byte_size = None
                     yield data
 
         return Stream(load())
@@ -279,5 +308,6 @@ class Buffer(Stream[T], Generic[T]):
     def __iter__(self) -> Iterator[T]:
         for entry in self._entries:
             with entry as data:
+                self._byte_size = None
                 yield data
 

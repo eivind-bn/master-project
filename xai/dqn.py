@@ -81,76 +81,61 @@ class DQN(Agent):
 
     @overload 
     def predict(self, 
-                observation: Observation, 
+                observations: Sequence[Observation], 
                 *, 
-                to_action: Literal[True] = True) -> Action: ...
+                to_action: Literal[True] = True) -> Sequence[Action]: ...
 
     @overload 
     def predict(self, 
-                observation: Observation, 
+                observations: Sequence[Observation], 
                 *,
                 to_action: Literal[False] = ...) -> Tensor: ...
 
     def predict(self, 
-                observation: Observation, 
+                observations: Sequence[Observation], 
                 *,
-                to_action: bool = True) -> Action|Tensor:
-        q_values: Tensor = self._policy(self.state(observation, to_tensor=True).movedim(2,0).unsqueeze(0)).squeeze(0)
+                to_action: bool = True) -> Sequence[Action]|Tensor:
+
+        states: Deque[Tensor] = deque(maxlen=4)
+        q_values: List[Tensor] = []
+
+        for observation in observations:
+            states.append(self.state(observation, to_tensor=True).movedim(2,0))
+            if len(states) == states.maxlen:
+                q_values = self._policy(torch.stack(tuple(states)))
 
         if to_action:
-            return self._actions[int(q_values.argmax(dim=0).item())]
+            actions: List[Action] = []
+            for q_values_row in q_values:
+                actions.append(self._actions[int(q_values_row.argmax(dim=0).item())])
+            return actions
         else:
-            return q_values
-
+            return torch.stack(q_values)
     
-    @overload
-    def rollout(self,
-                env: Asteroids, 
-                time_steps: int) -> Tuple[Step,...]: ...
-        
-    @overload
-    def rollout(self,
-                env: Asteroids, 
-                time_steps: int,
-                deque: Deque[Step]) -> None: ...
-    
-    def rollout(self,
-                env: Asteroids, 
-                time_steps: int,
-                deque: Deque[Step]|None = None) -> Tuple[Step,...]|None:
-        
-        if deque is None:
-            steps: List[Step]|Deque[Step] = []
-        else:
-            steps = deque
-        
-        if not env.running():
-            observation, rewards = env.reset()
-        else:
-            observation = env.observation
-        
-        for i in range(time_steps):
-            action = self.predict(observation)
-            next_observation,rewards = env.step(action)
-            done = not env.running()
-            steps.append(Step(
-                number=i,
-                observation=observation,
-                action=action,
-                rewards=rewards,
-                next_observation=next_observation,
-                done=done
-            ))
-
-            if done:
+    def rollout(self, env: Asteroids) -> Stream[Step]:
+        def iterator() -> Iterator[Step]:  
+            if not env.running():
                 observation, rewards = env.reset()
             else:
-                observation = next_observation
+                observation = env.observation
 
-        if deque is None:
-            return tuple(steps)
-        else:
-            return None
+            while True:
+                action = self.predict(observation)
+                next_observation,rewards = env.step(action)
+                done = not env.running()
+                steps.append(Step(
+                    number=i,
+                    observation=observation,
+                    action=action,
+                    rewards=rewards,
+                    next_observation=next_observation,
+                    done=done
+                ))
+
+                if done:
+                    observation, rewards = env.reset()
+                else:
+                    observation = next_observation
 
     def train(self, 
               num_episodes: int,
@@ -174,16 +159,18 @@ class DQN(Agent):
             max_memory=replay_buffer_memory,
             max_entries=buffer_entry_size
         )
-        small_buffer: List[Tuple[Observation,Action,int,Observation,bool]] = []
         huber_loss = torch.nn.SmoothL1Loss()
 
         learning_starts = buffer_entry_size*learning_starts
-
-        policy = copy.deepcopy(self._policy)
-        optimizer = torch.optim.Adam(policy.parameters())
+        time_step = 0
 
         with tqdm() as bar:
             for episode in range(num_episodes):
+                time_step += 1
+
+                if time_step % upd
+
+
                 if episode % update_target_frequency == 0:
                     self._policy = policy
                     policy = copy.deepcopy(self._policy)
