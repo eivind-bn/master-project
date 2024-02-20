@@ -132,12 +132,13 @@ class Genome(Agent):
         return tuple(actions)
     
     def populate(self, 
-                 population_size:           int,
-                 use_ram_genomes:           bool,
-                 use_ram_observations:      bool|None,
-                 max_memory:                Memory, 
-                 max_observation_memory:    Memory,
-                 verbose:                   bool = False) -> Population["Genome"]:
+                 population_size:                       int,
+                 use_ram_genomes:                       bool,
+                 use_ram_observations:                  bool|None,
+                 subprocesses_observation_memory_size:  Memory|None,
+                 max_memory:                            Memory, 
+                 max_observation_memory:                Memory,
+                 verbose:                               bool = False) -> Population["Genome"]:
         
         return Population(
             genomes=Stream(lambda: self.clone()).scan(self, lambda y,x: Genome(parents=(x,y))).take(population_size),
@@ -145,5 +146,6 @@ class Genome(Agent):
             max_observations_memory=max_observation_memory,
             use_ram_genomes=use_ram_genomes,
             use_ram_observations=use_ram_observations,
+            subprocesses_observation_memory_size=subprocesses_observation_memory_size,
             verbose=verbose
         )
