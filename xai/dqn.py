@@ -168,7 +168,7 @@ class DQN(Agent):
             for episode in range(num_episodes):
                 time_step += 1
 
-                if time_step % upd
+                
 
 
                 if episode % update_target_frequency == 0:

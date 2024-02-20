@@ -31,6 +31,8 @@ class Population(Generic[T]):
 
     def __init__(self, 
                  genomes:                   Iterable[T],
+                 use_ram_genomes:           bool,
+                 use_ram_observations:      bool|None = None,
                  max_genomes_memory:        Memory|None = GigaBytes(10),
                  max_observations_memory:   Memory|None = GigaBytes(10),
                  verbose:                   bool = True) -> None:
@@ -40,17 +42,20 @@ class Population(Generic[T]):
         self._genomes = Buffer(
             entries=genomes,
             eviction_policy="Throw", 
-            use_ram=False, 
+            use_ram=use_ram_genomes, 
             max_memory=max_genomes_memory,
             verbose=verbose
         )
-        
-        self._observations: Buffer[Observation] = Buffer(
-            entries=(),
-            eviction_policy="Random",
-            use_ram=False,
-            max_memory=max_observations_memory,
-        )
+
+        if use_ram_observations is not None:    
+            self._observations: Buffer[Observation]|None = Buffer(
+                entries=(),
+                eviction_policy="Random",
+                use_ram=use_ram_observations,
+                max_memory=max_observations_memory,
+            )
+        else:
+            self._observations = None
         
     def evolve(self,
                generations:             int,
@@ -90,7 +95,8 @@ class Population(Generic[T]):
                     
                 for fitness,observations in pool.imap(self.eval_fitness, loader(f"Generation: {generation}/{generations}")):
                     fitnesses.append(fitness)
-                    self._observations.extend(observations)
+                    if self._observations is not None:
+                        self._observations.extend(observations)
 
                 weights = Fitness.deviation_score(fitnesses).tuple()
 
@@ -123,6 +129,12 @@ class Population(Generic[T]):
 
                 assert self._genomes.entry_size() == population_size, f"New population size of {self._genomes.entry_size()} is incorrect."
         
+    def observation(self) -> Stream[Observation]:
+        if self._observations is not None:
+            return self._observations
+        else:
+            return Stream.empty()
+
     @staticmethod
     def eval_fitness(genome: T) -> Tuple[Fitness,Tuple[Observation,...]]:
         if "env" not in globals():
