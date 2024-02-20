@@ -73,7 +73,7 @@ class Buffer(Stream[T], Generic[T]):
         return self._max_entries
 
     def byte_size(self) -> Bytes:
-        if self._byte_size:
+        if self._byte_size is None:
             self._byte_size = sum((entry.size() for entry in self._entries), start=Bytes(0))
         return self._byte_size
     
