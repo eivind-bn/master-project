@@ -5,8 +5,7 @@ from .observation import Observation
 from .action import Action
 from .reward import Reward
 
-@dataclass(frozen=True, slots=True)
-class Step:
+class Step(NamedTuple):
     observation: Observation
     action: Action
     rewards: Tuple[Reward,...]
