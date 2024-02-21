@@ -30,14 +30,16 @@ class Population(Generic[T]):
     checkpoint_root = "checkpoints"
 
     def __init__(self, 
-                 genomes:                   Iterable[T],
-                 use_ram_genomes:           bool,
-                 use_ram_observations:      bool|None = None,
-                 max_genomes_memory:        Memory|None = GigaBytes(10),
-                 max_observations_memory:   Memory|None = GigaBytes(10),
-                 verbose:                   bool = True) -> None:
+                 genomes:                               Iterable[T],
+                 use_ram_genomes:                       bool,
+                 use_ram_observations:                  bool|None = None,
+                 max_genomes_memory:                    Memory|None = GigaBytes(10),
+                 max_observations_memory:               Memory|None = GigaBytes(10),
+                 subprocesses_observation_memory_size:  Memory|None = None,
+                 verbose:                               bool = True) -> None:
 
         self._verbose = verbose
+        self._subprocess_observation_memory_size = subprocesses_observation_memory_size
 
         self._genomes = Buffer(
             entries=genomes,
@@ -80,10 +82,22 @@ class Population(Generic[T]):
         else:
             save_dir = None
 
-        def loader(text: str|None = None) -> Iterator[T]:
+        def loader(text: str|None = None) -> Iterator[Tuple[T,Memory|None]]:
+            if self._subprocess_observation_memory_size is not None:
+                observation_mem_size = self._subprocess_observation_memory_size / number_of_processes
+            else:
+                observation_mem_size = None
+
             with tqdm(total=self._genomes.entry_size(), desc=text) as bar:
                 for genome in self._genomes:
-                    yield genome
+                    if text is None:
+                        ram_used = Memory.ram_used().gigabytes().float()
+                        ram_total = Memory.ram_total().gigabytes().float()
+                        text = f"Generation: {generation}/{generations}, Ram used: {ram_used/ram_total:.2f}%"
+
+                    yield genome, observation_mem_size
+
+                    bar.set_description(text)
                     bar.update()
 
         population_size = self._genomes.entry_size()
@@ -93,7 +107,7 @@ class Population(Generic[T]):
 
                 fitnesses: List[Fitness] = []
                     
-                for fitness,observations in pool.imap(self.eval_fitness, loader(f"Generation: {generation}/{generations}")):
+                for fitness,observations in pool.imap(self.eval_fitness, loader()):
                     fitnesses.append(fitness)
                     if self._observations is not None:
                         self._observations.extend(observations)
@@ -136,14 +150,22 @@ class Population(Generic[T]):
             return Stream.empty()
 
     @staticmethod
-    def eval_fitness(genome: T) -> Tuple[Fitness,Tuple[Observation,...]]:
+    def eval_fitness(genome_and_mem_constraint: Tuple[T,Memory|None]) -> Tuple[Fitness,Tuple[Observation,...]]:
         if "env" not in globals():
             globals()["env"] = Asteroids()
 
         env: Asteroids = globals()["env"]
         step = 0
+        genome = genome_and_mem_constraint[0]
+        max_observation_memory = genome_and_mem_constraint[1]
         fitness = Fitness()
-        recordings: List[Observation] = []
+        recordings: Buffer[Observation] = Buffer(
+            entries=(), 
+            eviction_policy="Random", 
+            use_ram=True, 
+            max_memory=max_observation_memory
+            )
+        
         for episode in range(3):
             observation, rewards = env.reset()
             fitness += Fitness(rewards={reward.name:reward.value for reward in rewards})
@@ -155,10 +177,10 @@ class Population(Generic[T]):
                     observation, rewards = env.step(action)
                     fitness += Fitness(rewards={reward.name:reward.value for reward in rewards})
 
-                    if random.random() < 0.2:
+                    if random.random() < 0.1:
                         recordings.append(observation)
 
-        return fitness, tuple(recordings)
+        return fitness, recordings.tuple()
 
     @overload
     def selection(self, policy: SelectionPolicy, weights: Sequence[int|float]) -> Stream[int]: ...
