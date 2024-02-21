@@ -90,7 +90,14 @@ class Population(Generic[T]):
 
             with tqdm(total=self._genomes.entry_size(), desc=text) as bar:
                 for genome in self._genomes:
+                    if text is None:
+                        ram_used = Memory.ram_used().gigabytes().float()
+                        ram_total = Memory.ram_total().gigabytes().float()
+                        text = f"Generation: {generation}/{generations}, Ram used: {ram_used/ram_total:.2f}%"
+
                     yield genome, observation_mem_size
+
+                    bar.set_description(text)
                     bar.update()
 
         population_size = self._genomes.entry_size()
@@ -100,7 +107,7 @@ class Population(Generic[T]):
 
                 fitnesses: List[Fitness] = []
                     
-                for fitness,observations in pool.imap(self.eval_fitness, loader(f"Generation: {generation}/{generations}")):
+                for fitness,observations in pool.imap(self.eval_fitness, loader()):
                     fitnesses.append(fitness)
                     if self._observations is not None:
                         self._observations.extend(observations)
