@@ -256,10 +256,6 @@ class DQN(Agent):
         self._replay_buffer.append(steps=stepper.take(learning_starts))
 
         for i,step in stepper.enumerate().take(total_time_steps):
-            
-
-
-
 
             exploration_rate = min(final_exploration_rate, exploration_rate_decay*exploration_rate)
         
