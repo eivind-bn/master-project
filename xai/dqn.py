@@ -17,97 +17,18 @@ from .step import Step
 from .optimizer import Adam
 from .agent import Agent
 from .stream import Stream
-from .buffer import Buffer
+from .reflist import RefList
 from .bytes import GigaBytes, Memory
+from .buffer import ArrayBuffer
 
 import torch
 import random
 import numpy as np
 import copy
 
-class ReplayBatch(NamedTuple):
-    state: Tensor
-    action: Tensor
-    reward: Tensor
-    next_state: Tensor
-    done: Tensor
-
-class ReplayBuffer:
-
-    def __init__(self, size: int, state_shape: Tuple[int,...], actions: Sequence[Action]) -> None:
-        self.state = torch.zeros((size,) + state_shape, dtype=torch.float32, device="cpu")
-        self.action = torch.zeros((size, len(actions)), dtype=torch.float32, device="cpu")
-        self.reward = torch.zeros((size, 1), dtype=torch.float32, device="cpu")
-        self.next_state = torch.zeros((size,) + state_shape, dtype=torch.float32, device="cpu")
-        self.done = torch.zeros((size, 1))
-
-        self._action_to_idx = {action:index for index,action in enumerate(actions)}
-        self._size = size
-        self._current_position = 0
-
-    @overload
-    def append(self, 
-               *,
-               steps:        Iterable[Step]) -> None: ...
-
-    @overload
-    def append(self, 
-               *,
-               state:       Tensor, 
-               action:      Tensor, 
-               reward:      Tensor, 
-               next_state:  Tensor, 
-               done:        Tensor) -> None: ...
-
-    def append(self, 
-               *,
-               steps:       Iterable[Step]|None = None, 
-               state:       Tensor|None = None, 
-               action:      Tensor|None = None, 
-               reward:      Tensor|None = None, 
-               next_state:  Tensor|None = None, 
-               done:        Tensor|None = None) -> None:
-        if steps is None:
-            assert all(arg is not None for arg in (state, action, reward, next_state, done))
-            assert len(state) == len(action) == len(reward) == len(next_state) == len(done)
-
-            indices = torch.arange(self._current_position, self._current_position + len(state), dtype=torch.int32, device="cpu") % self._size
-
-            self.state[indices] = state.to(dtype=torch.float32, device="cpu")
-            self.action[indices] = action.to(dtype=torch.float32, device="cpu")
-            self.reward[indices] = reward.to(dtype=torch.float32, device="cpu")
-            self.next_state[indices] = next_state.to(dtype=torch.float32, device="cpu")
-            self.done[indices] = done.to(dtype=torch.float32, device="cpu")
-
-            if len(indices) > 0:
-                self._current_position = int(indices[-1].item())
-        else:
-            self.append(
-                state=torch.stack([step.observation.translated().rotated().tensor(normalize=True, device="cpu") for step in steps]),
-                action=torch.tensor([self._action_to_idx[step.action] for step in steps], dtype=torch.int32, device="cpu"),
-                reward=torch.tensor([step.reward_sum() for step in steps], dtype=torch.float32, device="cpu"),
-                next_state=torch.stack([step.next_observation.translated().rotated().tensor(normalize=True, device="cpu") for step in steps]),
-                done=torch.tensor([float(step.done) for step in steps], dtype=torch.float32, device="cpu"),
-            )
-
-    def batch(self, size: int, device: Device) -> ReplayBatch:
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        selections = torch.randperm(len(self.state), device="cpu")[:size]
-
-        return ReplayBatch(
-            state=self.state[selections].to(device=device),
-            action=self.action[selections].to(device=device),
-            reward=self.reward[selections].to(device=device),
-            next_state=self.next_state[selections].to(device=device),
-            done=self.done[selections].to(device=device)
-        )
-
-
 class DQN(Agent):
 
-    def __init__(self, device: Device, translate: bool, rotate: bool, replay_buffer_size: int) -> None:
+    def __init__(self, device: Device, translate: bool, rotate: bool, replay_buffer_size: int|Memory) -> None:
         super().__init__()
         self._translate = translate
         self._rotate = rotate
@@ -141,10 +62,15 @@ class DQN(Agent):
             torch.nn.Linear(in_features=16*7*5, out_features=len(self._actions)),
         ).to(device=self._device)
 
-        self._replay_buffer = ReplayBuffer(
-            size=replay_buffer_size,
-            state_shape=(4,210,160,3),
-            actions=self._actions
+        self._replay_buffer = ArrayBuffer(
+            capacity=replay_buffer_size,
+            schema={
+                "state":        ((210,160,3), "float32"),
+                "action":       (len(self._actions), "int16"),
+                "reward":       (1, "float32"),
+                "next_state":   ((210,160,3), "float32"),
+                "done":         (1, "float32")
+            }
         )
 
     @overload
@@ -253,7 +179,7 @@ class DQN(Agent):
 
         stepper = self.rollout(Asteroids(), lambda: exploration_rate)
         
-        self._replay_buffer.append(steps=stepper.take(learning_starts))
+        
 
         for i,step in stepper.enumerate().take(total_time_steps):
             

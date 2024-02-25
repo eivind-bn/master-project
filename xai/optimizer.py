@@ -9,7 +9,7 @@ from torch.optim import Optimizer as TorchOptimizer
 from .loss import LossModule, Loss
 from .feed_forward import FeedForward
 from .stats import TrainStats
-from .buffer import Buffer
+from .reflist import RefList
 
 import torch
 

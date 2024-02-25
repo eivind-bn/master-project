@@ -11,10 +11,10 @@ class GenoType:
                  *,   
                  value:             float,
                  volatility:        float,
-                 min_value:         float = ...,
-                 max_value:         float = ...,
-                 min_volatility:    float = ...,
-                 max_volatility:    float = ...) -> None: ...
+                 min_value:         float|None = ...,
+                 max_value:         float|None = ...,
+                 min_volatility:    float|None = ...,
+                 max_volatility:    float|None = ...) -> None: ...
         
     @overload
     def __init__(self,    
@@ -28,8 +28,8 @@ class GenoType:
     def __init__(self,    
                  *,  
                  value:             float,
-                 min_value:         float = ...,
-                 max_value:         float = ...,
+                 min_value:         float|None = ...,
+                 max_value:         float|None = ...,
                  min_volatility:    float,
                  max_volatility:    float) -> None: ...
     
@@ -39,8 +39,8 @@ class GenoType:
                  volatility:        float,
                  min_value:         float,
                  max_value:         float,
-                 min_volatility:    float = ...,
-                 max_volatility:    float = ...) -> None: ...
+                 min_volatility:    float|None = ...,
+                 max_volatility:    float|None = ...) -> None: ...
 
     def __init__(self,    
                  *,  
@@ -132,6 +132,9 @@ class GenoType:
             weights = Stream(random.random).take(weights).tuple()
 
         weight_sum = sum(weights)
+
+        if weight_sum == 0.0:
+            weight_sum = 1.0
 
         value = (weights[0]/weight_sum)*genotype.value
         volatility = (weights[0]/weight_sum)*genotype.volatility
