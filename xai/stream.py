@@ -5,7 +5,7 @@ import dill
 import matplotlib.pyplot as plt
 
 if TYPE_CHECKING:
-    from .buffer import Buffer, EvictionPolicy
+    from .reflist import RefList, EvictionPolicy, Location
 
 X = TypeVar("X", covariant=True)
 Y = TypeVar("Y")
@@ -69,9 +69,14 @@ class Stream(Iterable[X], Generic[X]):
         return Stream(iterator())
     
     def take(self, count: int) -> "Stream[X]":
-        return (self.enumerate()
-                .take_while(lambda ix: ix[0] < count)
-                .map(lambda ix: ix[1]))
+        def iterator() -> Iterator[X]:
+            stop = count - 1
+            for i,x in enumerate(self):
+                yield x
+                if i == stop:
+                    break
+        
+        return Stream(iterator())
     
     def take_while(self, predicate: Callable[[X],bool]) -> "Stream[X]":
         def iterator() -> Iterator[X]:
@@ -84,9 +89,18 @@ class Stream(Iterable[X], Generic[X]):
         return Stream(iterator())
     
     def drop(self, count: int) -> "Stream[X]":
-        return (self.enumerate()
-                .drop_while(lambda ix: ix[0] < count)
-                .map(lambda ix: ix[1]))
+        def iterator() -> Iterator[X]:
+            iterator = iter(self)
+            start = count - 1
+
+            for i,x in enumerate(iterator):
+                if i == start:
+                    break
+
+            for x in iterator:
+                yield x
+
+        return Stream(iterator())
 
     def drop_while(self, predicate: Callable[[X],bool]) -> "Stream[X]":
         def iterator() -> Iterator[X]:
@@ -425,17 +439,17 @@ class Stream(Iterable[X], Generic[X]):
 
             return key_z
         
-    def buffer(self, 
-               eviction_policy: "EvictionPolicy", 
-               use_ram: bool, 
-               max_memory: Memory|None = None, 
-               max_entries: int|None = None, 
-               verbose: bool = False) -> "Buffer[X]":
-        from .buffer import Buffer
-        return Buffer(
+    def ref_list(self, 
+                 eviction_policy:   EvictionPolicy,
+                 location:          Location,
+                 max_memory:        Memory|None = None,
+                 max_entries:       int|None = None, 
+                 verbose:           bool = False) -> "RefList[X]":
+        from .reflist import RefList
+        return RefList(
             entries=self,
             eviction_policy=eviction_policy,
-            use_ram=use_ram,
+            location=location,
             max_memory=max_memory,
             max_entries=max_entries,
             verbose=verbose

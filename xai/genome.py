@@ -10,7 +10,7 @@ from .action import Actions
 from .policy import Policy
 from .population import Population
 from .bytes import Memory
-from .buffer import Buffer
+from .reflist import Location
 from .stream import Stream
 from .asteroids import Asteroids
 from .genotype import GenoType
@@ -132,20 +132,25 @@ class Genome(Agent):
         return tuple(actions)
     
     def populate(self, 
-                 population_size:                       int,
-                 use_ram_genomes:                       bool,
-                 use_ram_observations:                  bool|None,
-                 subprocesses_observation_memory_size:  Memory|None,
-                 max_memory:                            Memory, 
-                 max_observation_memory:                Memory,
-                 verbose:                               bool = False) -> Population["Genome"]:
+                 population_size:           int,
+                 location:                  Location,
+                 max_memory:                Memory, 
+                 genomes_sampling_memsize:  Memory|None = None,
+                 observation_sampler:       Callable[[Observation],None]|None = None,
+                 verbose:                   bool = False) -> Population["Genome"]:
+        
+        ref_list = Stream(lambda: self.clone())\
+            .scan(self, lambda y,x: Genome(parents=(x,y)))\
+            .take(population_size)\
+            .ref_list(
+                location=location,
+                eviction_policy="Throw",
+                max_memory=max_memory,
+                verbose=verbose
+            )
         
         return Population(
-            genomes=Stream(lambda: self.clone()).scan(self, lambda y,x: Genome(parents=(x,y))).take(population_size),
-            max_genomes_memory=max_memory,
-            max_observations_memory=max_observation_memory,
-            use_ram_genomes=use_ram_genomes,
-            use_ram_observations=use_ram_observations,
-            subprocesses_observation_memory_size=subprocesses_observation_memory_size,
-            verbose=verbose
+            genomes=ref_list,
+            observation_sampler=observation_sampler,
+            genomes_sampling_memsize=genomes_sampling_memsize
         )

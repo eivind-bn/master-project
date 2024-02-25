@@ -1,313 +1,145 @@
 from typing import *
+from numpy.typing import NDArray, DTypeLike
 from collections import deque
-from typing import Iterator
-from tqdm import tqdm
 
-from .bytes import Memory, Bytes
-from .cache import Cache, Dump, Load
 from .stream import Stream
+from .bytes import Memory, Bytes
 
-import random
-import copy
+import numpy as np
+import math
+import pickle
 
 T = TypeVar("T")
 
-EvictionPolicy = Literal["FIFO", "Random", "Reject", "Throw"]
+DataType = Literal[
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+    "uint128",
+    "uint256",
 
-class EntryRejection(Exception):
-    pass
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "int128",
+    "int256",
 
-class Buffer(Stream[T], Generic[T]):
+    "float16",
+    "float32",
+    "float64",
+    "float80",
+    "float96",
+    "float128",
+    "float256",
+]
+
+class ArrayBuffer:
 
     def __init__(self, 
-                 entries:           Iterable[Cache[T]|T],
-                 eviction_policy:   EvictionPolicy,
-                 use_ram:           bool,
-                 max_memory:        Memory|None = None,
-                 max_entries:       int|None = None, 
-                 verbose:           bool = False) -> None:
-        super().__init__(self)
-
-        def fifo_evict() -> Cache[T]:
-            return self._entries.pop(0)
+                 *,
+                 data:          Mapping[str,NDArray]|None = None,
+                 capacity:      int|Memory, 
+                 schema:        Mapping[str, Tuple[Tuple[int,...]|int, DataType]]) -> None:
         
-        def random_evict() -> Cache[T]:
-            idx = random.randrange(0, len(self._entries))
-            cache = self._entries.pop(idx)
-            return cache
+        self._schema: Mapping[str, Tuple[Tuple[int,...], DataType]] = {}
+
+        for name,(shape,dtype) in schema.items():
+            if isinstance(shape, int):
+                shape = (shape,)
+            self._schema[name] = (shape, dtype)
+
+        if isinstance(capacity, int):
+            self._row_capacity = capacity
+        else:
+            row_size = 0
+            for shape,dtype in self._schema.values():
+                row_size += math.prod(shape) * np.dtype(dtype).itemsize
+
+            self._row_capacity = int(capacity.bytes().float() / row_size)
+
+        self._length = 0
+        self._next_row = 0
+        self._mem_capacity = Bytes(0)
+        self._arrays: Dict[str,NDArray] = {}
+
+        for row_name,(shape,dtype) in self._schema.items():
+            array = np.zeros((self._row_capacity,) + shape, dtype=np.dtype(dtype))
+            self._arrays[row_name] = array
+            self._mem_capacity += Bytes(array.nbytes)
+
+        if data is not None:
+            self.append(data)
+
+    def data(self, occupied_only: bool) -> Dict[str,NDArray]:
+        if occupied_only:
+            return {name:array[:self._length] for name,array in self._arrays.items()}
+        else:
+            return {name:array for name,array in self._arrays.items()}
+
+    def append(self, rows: Mapping[str,NDArray]) -> None:
+        if not rows:
+            return
         
-        def reject_evict() -> Cache[T]:
-            raise EntryRejection()
-        
-        def throw_evict() -> Cache[T]:
-            raise OverflowError(f"Buffer is full.")
+        row_cnt: int|None = None
 
-        self._eviction_policies: Dict[EvictionPolicy,Callable[[],Cache[T]]] = {
-            "FIFO": fifo_evict,
-            "Random": random_evict,
-            "Reject": reject_evict,
-            "Throw": throw_evict
-        }
-
-        self._eviction_policy = eviction_policy
-        self._evict = self._eviction_policies[eviction_policy]
-        self._use_ram = use_ram
-        self._max_memory = max_memory
-        self._max_entries = max_entries
-        self._verbose = verbose
-        self._byte_size: Memory|None = None
-        self._entries: List[Cache[T]] = []
-
-        self.extend(entries, verbose=verbose)
-
-    @property
-    def use_ram(self) -> bool:
-        return self._use_ram
-
-    @property
-    def max_memory(self) -> Memory|None:
-        return self._max_memory
-    
-    @property
-    def max_entries(self) -> int|None:
-        return self._max_entries
-
-    def byte_size(self) -> Bytes:
-        if self._byte_size is None:
-            self._byte_size = sum((entry.size() for entry in self._entries), start=Bytes(0))
-        return self._byte_size
-    
-    def entry_size(self) -> int:
-        return len(self._entries)
-    
-    def randoms(self, with_replacement: bool) -> Stream[T]:
-        def iterator() -> Iterator[T]:
-            N = self.entry_size()
-            if with_replacement:
-                while True:
-                    idx = random.randrange(0,N)
-                    with self._entries[idx] as data:
-                        self._byte_size = None
-                        yield data
+        for row_name, dst in self.data(False).items():
+            src = rows[row_name]
+            if src.shape == dst.shape[1:]:
+                if row_cnt is None:
+                    row_cnt = 1
+                elif row_cnt != 1:
+                    raise ValueError(f"Expected {row_name} to contain {row_cnt} rows, but found 1")
+            elif src.shape[1:] == dst.shape[1:]:
+                if row_cnt is None:
+                    row_cnt = src.shape[0]
+                elif row_cnt != src.shape[0]:
+                    raise ValueError(f"Expected {row_name} to contain {row_cnt} rows, but found {src.shape[0]}")  
             else:
-                indices = list(range(0,N))
-                while indices:
-                    idx = random.randrange(0,len(indices))
-                    with self._entries[indices.pop(idx)] as data:
-                        self._byte_size = None
-                        yield data
-
-        return Stream(iterator())
-    
-    def append(self,
-               entry:           Cache[T]|T,
-               eviction_policy: EvictionPolicy|None = None) -> None:
-        self.extend(
-            entries=(entry, ),
-            eviction_policy=eviction_policy
-        )
-    
-    def extend(self, 
-               entries:         Iterable[Cache[T]|T], 
-               eviction_policy: EvictionPolicy|None = None,
-               verbose:         bool = False) -> None:
-        byte_size = self.byte_size()
-        entry_size = self.entry_size()
-
-        if eviction_policy is None:
-            evict = self._evict
-        else:
-            evict = self._eviction_policies[eviction_policy]
-
-        try:
-            with tqdm(disable=not verbose) as bar:
-                for entry in entries:
-                    entry = self._to_cache(entry)
-
-                    new_size = byte_size + entry.size()
-                    if self._max_memory is not None:
-                        if new_size > self._max_memory:
-                            while new_size > self._max_memory:
-                                new_size -= evict().size()
-
-                    if self._max_entries is not None:
-                        while not entry_size < self._max_entries:
-                            evict()
-                            entry_size -= 1
-
-                    self._entries.append(entry)
-                    byte_size = new_size
-
-                    bar.set_description(self._get_load_text(byte_size))
-                    bar.update()
-        except EntryRejection:
-            pass
-
-        self._byte_size = byte_size
-
-    def appended(self,
-                 other:             Cache[T]|T, 
-                 eviction_policy:   EvictionPolicy|None = None) -> "Buffer[T]":
-        return self.extended(
-            other=(other,),
-            eviction_policy=eviction_policy
-        )
-
-    def extended(self, 
-                 other:             Iterable[Cache[T]|T], 
-                 eviction_policy:   EvictionPolicy|None = None,
-                 verbose:           bool = False) -> "Buffer[T]":
-        buffer = self.copy()
-        buffer.extend(
-            entries=other,
-            eviction_policy=eviction_policy,
-            verbose=verbose
-        )
-        return buffer
-    
-    def new_like(self, entries: Iterable[Cache[T]|T]) -> "Buffer[T]":
-        return Buffer(
-            entries=entries,
-            eviction_policy=self._eviction_policy,
-            use_ram=self._use_ram,
-            max_memory=self._max_memory,
-            max_entries=self._max_entries,
-            verbose=self._verbose
-        )
-    
-    @overload
-    def pop(self, loc: int) -> T: ...
-
-    @overload
-    def pop(self, loc: Sequence[int]) -> Stream[T]: ...
-
-    def pop(self, loc: int|Sequence[int]) -> T|Stream[T]:
-        self._byte_size = None
-        if isinstance(loc, Sequence):
-            keep_flags = [True]*self.entry_size()
-            for index in loc:
-                keep_flags[index] = False
-
-            keep_list: List[Cache[T]] = []
-            pop_list: List[Cache[T]] = []
-            
-            for i,keep in enumerate(keep_flags):
-                if keep:
-                    keep_list.append(self._entries[i])
-                else:
-                    pop_list.append(self._entries[i])
-
-            def loader() -> Iterator[T]:
-                for pop_item in pop_list:
-                    with pop_item as data:
-                        yield data
-
-            self._entries = keep_list
-            return Stream(loader())
-        else:
-            with self._entries[loc] as data:
-                return data
-            
-    def remove(self, loc: int|Sequence[int]) -> None:
-        self._byte_size = None
-        self.pop(loc)
-
-    def replace(self, 
-                entries:            Iterable[Tuple[int,Cache[T]|T]],
-                eviction_policy:    EvictionPolicy|None = None,
-                verbose:            bool = False) -> None:
-
-        byte_size = self.byte_size()
-
-        if eviction_policy is None:
-            evict = self._evict
-        else:
-            evict = self._eviction_policies[eviction_policy]
+                raise ValueError(f"{row_name} has incorrect shape {src.shape}. Expected {dst.shape[1:]}")
         
-        try:
-            with tqdm(disable=not verbose) as bar:
-                for index,new_value in entries:
-                    old_value = self._entries[index]
-                    new_value = self._to_cache(new_value)
+        assert row_cnt
+        indices = np.arange(self._next_row, self._next_row + row_cnt) % self._row_capacity
 
-                    if self._max_memory is not None:
-                        old_value_size = old_value.size()
-                        new_value_size = new_value.size()
-                        new_size = byte_size + new_value_size - old_value_size
-                        while new_size > self._max_memory:
-                            new_size -= evict().size()
-                        
-                    self._entries[index] = new_value
-                    byte_size = new_size
+        for row_name, dst in self.data(False).items():
+            dst[indices] = rows[row_name]
+        
+        self._length = min(self._length + row_cnt, self._row_capacity)
+        
+    def resized(self, capacity: int|Memory, copy: bool) -> "ArrayBuffer":
+        return ArrayBuffer(
+            data=self.data(True).copy() if copy else self.data(True),
+            capacity=capacity,
+            schema=self._schema)
 
-                    bar.set_description(self._get_load_text(byte_size))
-                    bar.update()
-        except EntryRejection:
-            pass
-
-        self._byte_size = byte_size
-
-    def copy(self) -> "Buffer[T]":
-        return Buffer(
-            entries=self._entries.copy(),
-            eviction_policy=self._eviction_policy,
-            use_ram=self.use_ram,
-            max_memory=self.max_memory,
-            max_entries=self.max_entries,
-            verbose=self._verbose
-        )
+    def mini_batch(self, rows: int) -> Dict[str,NDArray]:
+        occupied_rows = self.data(True)
+        indices = np.arange(0, self._length)
+        np.random.shuffle(indices)
+        return {name:cast(NDArray, array[indices][:rows]) for name,array in occupied_rows.items()}
     
-    def clear(self) -> None:
-        self._byte_size = None
-        self._entries.clear()
+    def save(self, path: str) -> None:
+        with open(path, "w+b") as file:
+            pickle.dump(self, file)
 
-    def __add__(self, other: Iterable[Cache[T]|T]) -> "Buffer[T]":
-        return self.extended(other)
-
-    def __getitem__(self, loc: int|slice|Iterable[int]) -> Stream[T]:
-        def load() -> Iterator[T]:
-            if isinstance(loc, slice):
-                entries: Iterable[Cache[T]] = self._entries[loc]
-            elif isinstance(loc, Iterable):
-                entries = iter(self._entries[i] for i in loc)
+    @classmethod
+    def load(cls, path: str) -> "ArrayBuffer":
+        with open(path, "rb") as file:
+            buffer = pickle.load(file)
+            if isinstance(buffer, cls):
+                return buffer
             else:
-                entries = self._entries[loc:loc+1]
-
-            for entry in entries:
-                with entry as data:
-                    self._byte_size = None
-                    yield data
-
-        return Stream(load())
-
-    def _to_cache(self, data: Cache[T]|T) -> Cache[T]:
-        if isinstance(data, Cache):
-            return data.loaded() if self._use_ram else data.dumped()
-        else:
-            return Load(data) if self._use_ram else Dump(data)
-        
-    def _get_load_text(self, current_size: Bytes) -> str:
-        loc = "RAM" if self._use_ram else "Disk"
-        used_gigs = current_size.gigabytes().float()
-        if self._max_memory is not None:
-            max_gigs = self._max_memory.gigabytes().float()
-            return f"{loc} used: {used_gigs:.2f}/{max_gigs:.2f}GB"
-        else:
-            return f"{loc} used: {used_gigs:.2f}GB"
+                raise TypeError(f"Unpickled object is of incorrect type: {type(buffer)}")
         
     def __repr__(self) -> str:
         cls_name = self.__class__.__name__
-        use_ram = self._use_ram
-        entries = len(self._entries)
-        size = self.byte_size().megabytes().float()
-        if self._max_memory:
-            capacity = (size / self._max_memory.megabytes().float())*100
-            return f"{cls_name}({use_ram=}, {entries=}, {size=:.2f}MB, {capacity=:.2f}%)"
-        return f"{cls_name}({use_ram=}, {entries=}, {size=:.2f}MB)"
-    
-    def __iter__(self) -> Iterator[T]:
-        for entry in self._entries:
-            with entry as data:
-                self._byte_size = None
-                yield data
+        dim = {name:array.shape[1:] for name,array in self.data(False).items()}
+        length = len(self)
+        max_length = self._row_capacity
+        max_memsize = self._mem_capacity.gigabytes().float()
+        memsize = (length/max_length)*max_memsize
+        return f"{cls_name}({dim=}, rows={length}/{max_length}, memsize={memsize:.2f}/{max_memsize:.2f}GB)"
 
+    def __len__(self) -> int:
+        return self._length

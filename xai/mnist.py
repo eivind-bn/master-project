@@ -1,6 +1,6 @@
 from typing import *
 from .policy import Policy, Device
-from .buffer import Buffer
+from .reflist import RefList
 from .bytes import GigaBytes
 from .explainer import Explainer
 from .stats import TrainStats
@@ -45,7 +45,7 @@ class MNIST:
             else:
                 yield torch.from_numpy(images).cpu()
 
-        self.buffer = Buffer(
+        self.buffer = RefList(
             entries=create_mnist(),
             eviction_policy="Random",
             use_ram=use_ram,

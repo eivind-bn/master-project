@@ -5,10 +5,10 @@ from collections import deque
 from .agent import Agent
 from .stream import Stream
 from .fitness import Fitness
-from .buffer import Buffer
+from .reflist import RefList
 from .bytes import Memory
 from .asteroids import Asteroids
-from .cache import Cache
+from .objref import ObjRef
 from .observation import Observation
 from .bytes import GigaBytes
 from .policy import Policy
@@ -30,34 +30,16 @@ class Population(Generic[T]):
     checkpoint_root = "checkpoints"
 
     def __init__(self, 
-                 genomes:                               Iterable[T],
-                 use_ram_genomes:                       bool,
-                 use_ram_observations:                  bool|None = None,
-                 max_genomes_memory:                    Memory|None = GigaBytes(10),
-                 max_observations_memory:               Memory|None = GigaBytes(10),
-                 subprocesses_observation_memory_size:  Memory|None = None,
-                 verbose:                               bool = True) -> None:
+                 genomes:                   RefList[T],
+                 observation_sampler:       Callable[[Observation],None]|None = None,
+                 genomes_sampling_memsize:  Memory|None = None,
+                 verbose:                   bool = True) -> None:
 
         self._verbose = verbose
-        self._subprocess_observation_memory_size = subprocesses_observation_memory_size
+        self._genomes_sampling_memsize = genomes_sampling_memsize
+        self._observation_sampler = observation_sampler
 
-        self._genomes = Buffer(
-            entries=genomes,
-            eviction_policy="Throw", 
-            use_ram=use_ram_genomes, 
-            max_memory=max_genomes_memory,
-            verbose=verbose
-        )
-
-        if use_ram_observations is not None:    
-            self._observations: Buffer[Observation]|None = Buffer(
-                entries=(),
-                eviction_policy="Random",
-                use_ram=use_ram_observations,
-                max_memory=max_observations_memory,
-            )
-        else:
-            self._observations = None
+        self.genomes = genomes
         
     def evolve(self,
                generations:             int,
@@ -83,24 +65,24 @@ class Population(Generic[T]):
             save_dir = None
 
         def loader(text: str|None = None) -> Iterator[Tuple[T,Memory|None]]:
-            if self._subprocess_observation_memory_size is not None:
-                observation_mem_size = self._subprocess_observation_memory_size / number_of_processes
+            if self._genomes_sampling_memsize is not None:
+                genome_sampling_memsize = self._genomes_sampling_memsize / number_of_processes
             else:
-                observation_mem_size = None
+                genome_sampling_memsize = None
 
-            with tqdm(total=self._genomes.entry_size(), desc=text) as bar:
-                for genome in self._genomes:
+            with tqdm(total=self.genomes.entry_size(), desc=text) as bar:
+                for genome in self.genomes:
                     if text is None:
                         ram_used = Memory.ram_used().gigabytes().float()
                         ram_total = Memory.ram_total().gigabytes().float()
                         text = f"Generation: {generation}/{generations}, Ram used: {ram_used/ram_total:.2f}%"
 
-                    yield genome, observation_mem_size
+                    yield genome, genome_sampling_memsize
 
                     bar.set_description(text)
                     bar.update()
 
-        population_size = self._genomes.entry_size()
+        population_size = self.genomes.entry_size()
         
         with mp.Pool(processes=number_of_processes) as pool:
             for generation in range(generations):
@@ -109,8 +91,9 @@ class Population(Generic[T]):
                     
                 for fitness,observations in pool.imap(self.eval_fitness, loader()):
                     fitnesses.append(fitness)
-                    if self._observations is not None:
-                        self._observations.extend(observations)
+                    if self._observation_sampler is not None:
+                        for observation in observations:
+                            self._observation_sampler(observation)
 
                 weights = Fitness.deviation_score(fitnesses).tuple()
 
@@ -119,7 +102,7 @@ class Population(Generic[T]):
 
                 if generation % save_interval == 0 and best_genome_idx is not None and save_dir is not None:
                     file_path = os.path.join(save_dir, f"genome{generation}")
-                    self._genomes[best_genome_idx[0]].foreach(lambda genome: genome.save(file_path))
+                    self.genomes[best_genome_idx[0]].foreach(lambda genome: genome.save(file_path))
 
                 print(f"Worst: {worst_to_best[0]}")
                 print(f"Best: {worst_to_best[-1]}")
@@ -135,36 +118,32 @@ class Population(Generic[T]):
 
                 def breed() -> Iterator[T]:
                     while True:
-                        p1, p2, = self._genomes[random.choices(parents_idx, k=2)]
+                        p1, p2, = self.genomes[random.choices(parents_idx, k=2)]
                         offspring = p1.__class__(parents=(p1,p2))
                         yield offspring
 
-                self._genomes = self._genomes.new_like((self._genomes[survivors_idx] + breed()).take(population_size))
+                self.genomes = self.genomes.new_like((self.genomes[survivors_idx] + breed()).take(population_size))
 
-                assert self._genomes.entry_size() == population_size, f"New population size of {self._genomes.entry_size()} is incorrect."
-        
-    def observation(self) -> Stream[Observation]:
-        if self._observations is not None:
-            return self._observations
-        else:
-            return Stream.empty()
+                assert self.genomes.entry_size() == population_size, f"New population size of {self.genomes.entry_size()} is incorrect."
 
     @staticmethod
-    def eval_fitness(genome_and_mem_constraint: Tuple[T,Memory|None]) -> Tuple[Fitness,Tuple[Observation,...]]:
+    def eval_fitness(genome_and_sampling_memsize: Tuple[T,Memory|None]) -> Tuple[Fitness,Tuple[Observation,...]]:
         if "env" not in globals():
             globals()["env"] = Asteroids()
 
         env: Asteroids = globals()["env"]
         step = 0
-        genome = genome_and_mem_constraint[0]
-        max_observation_memory = genome_and_mem_constraint[1]
+        genome, sampling_memsize = genome_and_sampling_memsize
         fitness = Fitness()
-        recordings: Buffer[Observation] = Buffer(
-            entries=(), 
-            eviction_policy="Random", 
-            use_ram=True, 
-            max_memory=max_observation_memory
-            )
+
+        if sampling_memsize is None:
+            recordings: RefList[Observation]|None = None
+        else:
+            recordings = RefList(
+                eviction_policy="Random",
+                location="RAM",
+                max_memory=sampling_memsize
+                )
         
         for episode in range(3):
             observation, rewards = env.reset()
@@ -177,10 +156,13 @@ class Population(Generic[T]):
                     observation, rewards = env.step(action)
                     fitness += Fitness(rewards={reward.name:reward.value for reward in rewards})
 
-                    if random.random() < 0.1:
+                    if random.random() < 0.1 and recordings is not None:
                         recordings.append(observation)
 
-        return fitness, recordings.tuple()
+        if recordings is not None:
+            return fitness, recordings.tuple()
+        else:
+            return fitness, tuple()
 
     @overload
     def selection(self, policy: SelectionPolicy, weights: Sequence[int|float]) -> Stream[int]: ...
@@ -190,7 +172,7 @@ class Population(Generic[T]):
 
     def selection(self, policy: SelectionPolicy, weights: Sequence[int|float]|None = None) -> Stream[int]:
         if policy == "Random":
-            indices = tuple(range(self._genomes.entry_size()))
+            indices = tuple(range(self.genomes.entry_size()))
             def random_select() -> Iterator[int]:
                 while True:
                     index = random.choices(indices)[0]
@@ -198,14 +180,14 @@ class Population(Generic[T]):
 
             return Stream(random_select())
         elif weights is not None:
-            assert len(weights) == self._genomes.entry_size()
+            assert len(weights) == self.genomes.entry_size()
             match policy:
                 case "Elitism":
                     return Stream(sorted(enumerate(weights), key=lambda n: n[1], reverse=True))\
                         .map(lambda ir: ir[0])
                 
                 case "Roulette":
-                    indices = tuple(range(self._genomes.entry_size()))
+                    indices = tuple(range(self.genomes.entry_size()))
                     return Stream(lambda: random.choices(indices, weights=weights)[0])
                 
                 case "Rank":
@@ -222,14 +204,14 @@ class Population(Generic[T]):
 
     def __add__(self, other: "Population[T]") -> "Population[T]":
         return Population(
-            genomes=self._genomes + other._genomes,
-            max_genomes_memory=self._genomes.max_memory,
-            max_observations_memory=self._observations.max_memory,
+            genomes=self.genomes + other.genomes,
+            observation_sampler=self._observation_sampler,
+            genomes_sampling_memsize=self._genomes_sampling_memsize,
             verbose=self._verbose
         )
 
     def __getitem__(self, loc: int|slice|Iterable[int]) -> Stream[T]:
-        return self._genomes[loc]
+        return self.genomes[loc]
     
     def __len__(self) -> int:
-        return self._genomes.entry_size()
+        return self.genomes.entry_size()
