@@ -118,7 +118,7 @@ class ArrayBuffer:
         occupied_rows = self.data(True)
         indices = np.arange(0, self._length)
         np.random.shuffle(indices)
-        return {name:cast(NDArray, array[indices][:rows]) for name,array in occupied_rows.items()}
+        return {name:cast(NDArray, array[indices[:rows]]) for name,array in occupied_rows.items()}
     
     def save(self, path: str) -> None:
         with open(path, "w+b") as file:
