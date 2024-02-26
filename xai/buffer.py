@@ -11,6 +11,7 @@ import pickle
 
 T = TypeVar("T")
 
+Shape = Tuple[int,...]
 DataType = Literal[
     "uint8",
     "uint16",
@@ -41,9 +42,9 @@ class ArrayBuffer:
                  *,
                  data:          Mapping[str,NDArray]|None = None,
                  capacity:      int|Memory, 
-                 schema:        Mapping[str, Tuple[Tuple[int,...]|int, DataType]]) -> None:
+                 schema:        Mapping[str, Tuple[Shape|int, DataType]]) -> None:
         
-        self._schema: Mapping[str, Tuple[Tuple[int,...], DataType]] = {}
+        self._schema: Mapping[str, Tuple[Shape, DataType]] = {}
 
         for name,(shape,dtype) in schema.items():
             if isinstance(shape, int):

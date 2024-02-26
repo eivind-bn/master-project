@@ -15,10 +15,6 @@ class Agent(ABC):
         super().__init__()
         self.stats: Dict[str,Any] = {}
 
-    @abstractmethod
-    def predict(self, observations: Sequence[Observation]) -> Sequence[Action]:
-        pass
-
     def save(self, path: str) -> None:
         with open(path, "wb") as file:
             dill.dump(self, file)

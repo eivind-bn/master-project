@@ -440,8 +440,8 @@ class Stream(Iterable[X], Generic[X]):
             return key_z
         
     def ref_list(self, 
-                 eviction_policy:   EvictionPolicy,
-                 location:          Location,
+                 eviction_policy:   "EvictionPolicy",
+                 location:          "Location",
                  max_memory:        Memory|None = None,
                  max_entries:       int|None = None, 
                  verbose:           bool = False) -> "RefList[X]":
