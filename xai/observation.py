@@ -1,6 +1,6 @@
 from typing import *
 from numpy.typing import NDArray
-from torch import IntTensor, FloatTensor
+from torch import Tensor
 from .angle import Angle
 from .policy import Device
 
@@ -56,22 +56,15 @@ class Observation:
             if self.rendering is None:
                 self.rendering = self.spaceship|self.asteroids
             return self.rendering
-        
-    @overload
-    def tensor(self, normalize: Literal[False], device: Device) -> IntTensor: ...
 
-    @overload
-    def tensor(self, normalize: Literal[True], device: Device) -> FloatTensor: ...
-
-    def tensor(self, normalize: bool, device: Device) -> IntTensor|FloatTensor:
+    def tensor(self, normalize: bool, device: Device) -> Tensor:
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
+            
         if normalize:
-            tensor = torch.from_numpy(self.numpy(normalize))
-            return cast(FloatTensor, tensor.to(device=device, dtype=torch.float32))
+            return torch.from_numpy(self.numpy(normalize)).to(device=device, dtype=torch.float32)
         else:
-            tensor = torch.from_numpy(self.numpy(normalize))
-            return cast(FloatTensor, tensor.to(device=device, dtype=torch.uint8))
+            return torch.from_numpy(self.numpy(normalize)).to(device=device, dtype=torch.uint8)
 
     
     def translated(self, new_center: Tuple[int,int]|None = None) -> "Observation":
