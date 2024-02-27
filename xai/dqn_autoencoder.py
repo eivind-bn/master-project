@@ -166,15 +166,16 @@ class DQN(Agent):
               total_time_steps:                 int,
               replay_buffer_size:               int|Memory,
               learning_rate:                    float = 1e-4,
-              learning_starts:                  int = 100,
+              learning_starts:                  int = 3_000,
               batch_size:                       int = 32,
               tau:                              float = 1.0,
               gamma:                            float = 0.99,
               frame_skip:                       int = 4,
-              save_frequency:                   Tuple[int, Literal["step", "episode"], str]|None = None,
-              train_frequency:                  Tuple[int, Literal["step", "episode"]] = (4, "step"),
+              episode_save_freq:                int = 5,
+              save_path:                        str|None = None,
+              train_frequency:                  int = 32,
               gradient_steps:                   int = 1,
-              target_update_frequency:          Tuple[int, Literal["step", "episode"]] = (10_000, "step"),
+              target_update_frequency:          int = 2000,
               initial_exploration_rate:         float = 1.0,
               final_exploration_rate:           float = 0.05,
               final_exploration_rate_progress:  float = 0.75,
@@ -204,58 +205,28 @@ class DQN(Agent):
             }
         )
 
-        match save_frequency:
-            case (steps, "step", path):
-                def save(step: int, episode: int) -> None:
-                    if step % save_frequency[0] == 0:
-                        self.save(save_frequency[2])
-            case (episodes, "episode", path):
-                def save(step: int, episode: int) -> None:
-                    if episode % save_frequency[0] == 0:
-                        self.save(save_frequency[2])
-            case _:
-                def save(step: int, episode: int) -> None:
-                    pass
-        
-        match train_frequency:
-            case (steps, "step"):
-                def train(step: int, episode: int) -> bool:
-                    return step % train_frequency[0] == 0
-            case (episodes, "episode"):
-                def train(step: int, episode: int) -> bool:
-                    return episode % train_frequency[0] == 0
-            case _:
-                assert_never(train_frequency)
-
-        match target_update_frequency:
-            case (steps, "step"):
-                def target_update(step: int, episode: int) -> bool:
-                    return step % target_update_frequency[0] == 0
-            case (episode, "episode"):
-                def target_update(step: int, episode: int) -> bool:
-                    return episode % target_update_frequency[0] == 0
-            case _:
-                assert_never(target_update_frequency)
-
         with tqdm(total=learning_starts, desc="Filling replay buffer: ", disable=not verbose) as bar:
             for step in stepper.take(learning_starts):
                 replay_buffer.append(step.numpy())
-                
                 bar.update()
 
         total_reward = 0
         episode = 0
+
         with tqdm(total=total_time_steps, disable=not verbose) as bar:
-            for i,step in stepper.enumerate().take(total_time_steps):
+            for time_step,step in stepper.enumerate().take(total_time_steps):
+
                 if step.done:
                     total_reward = 0
                     episode += 1
+                    if save_path is not None and episode % episode_save_freq == 0:
+                        self.save(save_path)
 
                 total_reward += step.reward_sum()
 
                 replay_buffer.append(step.numpy())
 
-                if train(i, episode):
+                if time_step % train_frequency == 0:
                     for epoch in range(gradient_steps):
                         adam.zero_grad()
 
@@ -279,14 +250,12 @@ class DQN(Agent):
                         loss.backward()
                         adam.step()
 
-                if target_update(i, episode):
+                if time_step % target_update_frequency == 0:
                     self._policy = online_network
                     target_policy = copy.deepcopy(online_network)
                     online_network = copy.deepcopy(online_network)
                     adam = torch.optim.Adam(online_network.parameters(), lr=learning_rate)
 
-                save(i, episode)
-
-                exploration_rate = max(er0 + ((er - er0)/(ts)*i), 0.05)
+                exploration_rate = max(er0 + ((er - er0)/(ts)*time_step), 0.05)
                 bar.update()
-                bar.set_description(f"time_step={i}, {episode=}, {total_reward=}, exploration={exploration_rate:.2f}")
+                bar.set_description(f"time_step={time_step}, {episode=}, {total_reward=}, exploration={exploration_rate:.2f}")
