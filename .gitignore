@@ -164,3 +164,4 @@ MNIST/
 checkpoints/
 dataset/
 *.pt
+*.npy
