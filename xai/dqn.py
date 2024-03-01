@@ -27,94 +27,63 @@ import numpy as np
 import copy
 
 class DQNStep:
-    ACTIONS: Dict[Action,NDArray[float32]] = {
-        Actions.NOOP:   np.array([0]),
-        Actions.UP:     np.array([1]),
-        Actions.LEFT:   np.array([2]),
-        Actions.RIGHT:  np.array([3]),
-        Actions.FIRE:   np.array([4]),
-    }
-
     def __init__(self,    
-                 observations:   Tuple[Observation,...],
-                 action:         Action,
-                 rewards:        Tuple[Reward,...],
-                 done:           bool) -> None:
-        assert len(observations) == 5, f"Incorrect number of observations: {len(observations)}"
-
-        self.observations = observations
+                 observation:   Observation,
+                 action:        Action,
+                 rewards:       Tuple[Reward,...],
+                 done:          bool,
+                 state:         Tensor,
+                 next_state:    Tensor,
+                 action_id:     int) -> None:
+        self.observation = observation
         self.action = action
         self.rewards = rewards
         self.done = done
+        self.state = state
+        self.next_state = next_state
+        self.action_id = action_id
 
     def reward_sum(self) -> int:
         return sum(reward.value for reward in self.rewards)
-
-    def state(self, translate: bool, rotate: bool) -> NDArray[float32]:
-        observations = Stream(self.observations[:-1])
-
-        if translate:
-            observations = observations.map(lambda obs: obs.translated())
-
-        if rotate:
-            observations = observations.map(lambda obs: obs.rotated())
-
-        state = np.stack(observations.map(lambda obs: obs.numpy(normalize=True)).list())
-        state = np.moveaxis(state, 3, 1).reshape((12,210,160))
-
-        return state
     
-    def next_state(self, translate: bool, rotate: bool) -> NDArray[float32]:
-        observations = Stream(self.observations[1:])
-
-        if translate:
-            observations = observations.map(lambda obs: obs.translated())
-
-        if rotate:
-            observations = observations.map(lambda obs: obs.rotated())
-
-        state = np.stack(observations.map(lambda obs: obs.numpy(normalize=True)).list())
-        state = np.moveaxis(state, 3, 1).reshape((12,210,160))
-
-        return state
-    
-    def numpy(self, translate: bool, rotate: bool) -> Dict[str,NDArray[np.float32]]:
-        return dict(
-            state=self.state(translate=translate, rotate=rotate),
-            action=self.ACTIONS[self.action],
-            reward=np.array([self.reward_sum()]),
-            next_state = self.next_state(translate=translate, rotate=rotate),
-            done=np.array([float(self.done)])
-        )
+    def numpy(self) -> Dict[str,NDArray]:
+        return {
+            "state": self.state.numpy(force=True),
+            "action": np.array([self.action_id]),
+            "reward": np.array([self.reward_sum()]),
+            "next_state": self.next_state.numpy(force=True),
+            "done": np.array([self.done])
+        }
 
 class DQN(Agent):
 
-    def __init__(self, device: Device, translate: bool, rotate: bool) -> None:
+    def __init__(self, autoencoder_path: str, device: Device, translate: bool, rotate: bool) -> None:
         super().__init__()
         self._translate = translate
         self._rotate = rotate
+        self._actions = (
+                Actions.NOOP,
+                Actions.UP,
+                Actions.LEFT,
+                Actions.RIGHT,
+                Actions.FIRE
+                )
         if device == "auto":
             self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self._device = torch.device(device)
 
+        self._autoencoder: torch.nn.Sequential = torch.load(autoencoder_path, map_location=self._device)
+
+        self._encoder = self._autoencoder[:7]
+        self._decoder = self._autoencoder[7:]
+
         self._policy = torch.nn.Sequential(
-            torch.nn.Conv2d(in_channels=12, out_channels=16, kernel_size=(3,3), stride=(1,1)), # (102, 76)
+            torch.nn.Linear(in_features=4*32, out_features=2*32),
             torch.nn.ReLU(),
-            torch.nn.Conv2d(in_channels=16, out_channels=24, kernel_size=(5,5), stride=(2,2)), # (107, 76)
+            torch.nn.Linear(in_features=2*32, out_features=32),
             torch.nn.ReLU(),
-            torch.nn.Conv2d(in_channels=24, out_channels=28, kernel_size=(7,7), stride=(3,3)),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(in_channels=28, out_channels=32, kernel_size=(7,7), stride=(4,4)),
-            torch.nn.ReLU(),
-
-            torch.nn.Flatten(start_dim=1),
-
-            torch.nn.Linear(in_features=1120, out_features=512),
-            torch.nn.ReLU(),
-            torch.nn.Linear(in_features=512, out_features=256),
-            torch.nn.ReLU(),
-            torch.nn.Linear(in_features=256, out_features=len(DQNStep.ACTIONS))
+            torch.nn.Linear(in_features=32, out_features=len(self._actions))
         ).to(device=self._device)
     
     def rollout(self, 
@@ -130,63 +99,66 @@ class DQN(Agent):
         
         def iterator() -> Iterator[DQNStep]:
             env = Asteroids()
-            observations: Deque[Observation] = deque(maxlen=5)
-            actions = tuple(DQNStep.ACTIONS)
+            observation, rewards = env.reset()
+            latents: Deque[Tensor] = deque(maxlen=4)
+            
+            def encode(observation: Observation) -> Tensor:
+                if self._translate:
+                    observation = observation.translated()
+                if self._rotate:
+                    observation = observation.rotated()
 
-            action: Action = Actions.NOOP
-            rewards: Tuple[Reward,...]= tuple()
-            running = False
+                embedding: Tensor = self._encoder(observation.tensor(normalize=True, device=self._device).unsqueeze(0))
+                embedding = embedding.squeeze(0)
 
-            while len(observations) < observations.maxlen:
-                running = env.running()
+                return embedding
+
+            while len(latents) < latents.maxlen:
                 if env.running():
-                    action = random.choice(actions)
-                    observation,rewards = env.step(action, steps=frame_skips)
+                    action_id = random.randrange(0, len(self._actions))
+                    action = self._actions[action_id]
+                    observation,rewards = env.step(action)
+                    latents.append(encode(observation))
                 else:
-                    observation, rewards = env.reset()
+                    env.reset()
 
-                observations.append(observation)
+            state = torch.stack(tuple(latents)).reshape((1,-1))
 
-            step = DQNStep(
-                observations=tuple(observations),
-                action=action,
-                rewards=rewards,
-                done=not running
-            )
-
-            yield step
-
+            skip_cnt = 0
+            action_id = random.randrange(0, len(self._actions))
+            action = self._actions[action_id]
             while True:
-                running = env.running()
-                if running:
-                    if explore():
-                        action = random.choice(actions)
+                if env.running():
+                    if skip_cnt < frame_skips:
+                        skip_cnt += 1
+                        action_id = random.randrange(0, len(self._actions))
+                        action = self._actions[action_id]
                     else:
-                        state = step.next_state(translate=self._translate, rotate=self._rotate)
-                        tensor_state = torch.from_numpy(state).to(
-                            dtype=torch.float32,
-                            device=self._device
-                        ).unsqueeze(0)
+                        skip_cnt = 0
+                        if explore():
+                            action_id = random.randrange(0, len(self._actions))
+                            action = self._actions[action_id]
+                        else:
+                            q_values: Tensor = self._policy(state)
+                            action_id = int(q_values.argmax(1).item())
+                            action = self._actions[action_id]
 
-                        policy: Tensor = self._policy(tensor_state)
+                    observation,rewards = env.step(action)
+                    latents.append(encode(observation))
 
-                        action = actions[int(policy.argmax(1).item())]
+                    next_state = torch.stack(tuple(latents)).reshape((1,-1))
 
-                    observation,rewards = env.step(action, steps=frame_skips)
-
+                    yield DQNStep(
+                        observation=observation,
+                        action=action,
+                        rewards=rewards,
+                        done=not env.running(),
+                        state=state,
+                        next_state=next_state,
+                        action_id=action_id
+                    )
                 else:
-                    observation, rewards = env.reset()
-
-                observations.append(observation)
-
-                step = DQNStep(
-                    observations=tuple(observations),
-                    action=action,
-                    rewards=rewards,
-                    done=not running
-                )
-
-                yield step
+                    env.reset()
 
         return Stream(iterator())
 
@@ -194,15 +166,16 @@ class DQN(Agent):
               total_time_steps:                 int,
               replay_buffer_size:               int|Memory,
               learning_rate:                    float = 1e-4,
-              learning_starts:                  int = 100,
+              learning_starts:                  int = 3_000,
               batch_size:                       int = 32,
               tau:                              float = 1.0,
               gamma:                            float = 0.99,
               frame_skip:                       int = 4,
-              save_frequency:                   Tuple[int, Literal["step", "episode"], str]|None = None,
-              train_frequency:                  Tuple[int, Literal["step", "episode"]] = (4, "step"),
+              episode_save_freq:                int = 5,
+              save_path:                        str|None = None,
+              train_frequency:                  int = 32,
               gradient_steps:                   int = 1,
-              target_update_frequency:          Tuple[int, Literal["step", "episode"]] = (10_000, "step"),
+              target_update_frequency:          int = 2000,
               initial_exploration_rate:         float = 1.0,
               final_exploration_rate:           float = 0.05,
               final_exploration_rate_progress:  float = 0.75,
@@ -224,66 +197,36 @@ class DQN(Agent):
         replay_buffer = ArrayBuffer(
             capacity=replay_buffer_size,
             schema={
-                "state":        ((12,210,160), "float32"),
+                "state":        ((4*32), "float32"),
                 "action":       (1, "uint8"),
                 "reward":       (1, "float32"),
-                "next_state":   ((12,210,160), "float32"),
+                "next_state":   ((4*32), "float32"),
                 "done":         (1, "float32")
             }
         )
 
-        match save_frequency:
-            case (steps, "step", path):
-                def save(step: int, episode: int) -> None:
-                    if step % save_frequency[0] == 0:
-                        self.save(save_frequency[2])
-            case (episodes, "episode", path):
-                def save(step: int, episode: int) -> None:
-                    if episode % save_frequency[0] == 0:
-                        self.save(save_frequency[2])
-            case _:
-                def save(step: int, episode: int) -> None:
-                    pass
-        
-        match train_frequency:
-            case (steps, "step"):
-                def train(step: int, episode: int) -> bool:
-                    return step % train_frequency[0] == 0
-            case (episodes, "episode"):
-                def train(step: int, episode: int) -> bool:
-                    return episode % train_frequency[0] == 0
-            case _:
-                assert_never(train_frequency)
-
-        match target_update_frequency:
-            case (steps, "step"):
-                def target_update(step: int, episode: int) -> bool:
-                    return step % target_update_frequency[0] == 0
-            case (episode, "episode"):
-                def target_update(step: int, episode: int) -> bool:
-                    return episode % target_update_frequency[0] == 0
-            case _:
-                assert_never(target_update_frequency)
-
         with tqdm(total=learning_starts, desc="Filling replay buffer: ", disable=not verbose) as bar:
             for step in stepper.take(learning_starts):
-                replay_buffer.append(step.numpy(translate=self._translate, rotate=self._rotate))
-                
+                replay_buffer.append(step.numpy())
                 bar.update()
 
         total_reward = 0
         episode = 0
+
         with tqdm(total=total_time_steps, disable=not verbose) as bar:
-            for i,step in stepper.enumerate().take(total_time_steps):
+            for time_step,step in stepper.enumerate().take(total_time_steps):
+
                 if step.done:
                     total_reward = 0
                     episode += 1
+                    if save_path is not None and episode % episode_save_freq == 0:
+                        self.save(save_path)
 
                 total_reward += step.reward_sum()
 
-                replay_buffer.append(step.numpy(translate=self._translate, rotate=self._rotate))
+                replay_buffer.append(step.numpy())
 
-                if train(i, episode):
+                if time_step % train_frequency == 0:
                     for epoch in range(gradient_steps):
                         adam.zero_grad()
 
@@ -307,14 +250,12 @@ class DQN(Agent):
                         loss.backward()
                         adam.step()
 
-                if target_update(i, episode):
+                if time_step % target_update_frequency == 0:
                     self._policy = online_network
                     target_policy = copy.deepcopy(online_network)
                     online_network = copy.deepcopy(online_network)
                     adam = torch.optim.Adam(online_network.parameters(), lr=learning_rate)
 
-                save(i, episode)
-
-                exploration_rate = max(er0 + ((er - er0)/(ts)*i), 0.05)
+                exploration_rate = max(er0 + ((er - er0)/(ts)*time_step), 0.05)
                 bar.update()
-                bar.set_description(f"time_step={i}, {episode=}, {total_reward=}, exploration={exploration_rate:.2f}")
+                bar.set_description(f"time_step={time_step}, {episode=}, {total_reward=}, exploration={exploration_rate:.2f}")
