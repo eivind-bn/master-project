@@ -3,5 +3,6 @@
         "endianness",
         "flatmap",
         "shap"
-    ]
+    ],
+    "mypy.dmypyExecutable": "/home/eivind/master-project/.venv/bin/dmypy"
 }

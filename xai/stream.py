@@ -1,7 +1,7 @@
 from typing import *
 from .bytes import Memory
 
-import dill
+import pickle
 import matplotlib.pyplot as plt
 
 if TYPE_CHECKING:
@@ -459,7 +459,7 @@ class Stream(Iterable[X], Generic[X]):
         for x in self:
             y,path = obj_and_path(x)
             with open(path, "wb") as file:
-                dill.dump(y, file)
+                pickle.dump(y, file)
 
     def load(self, type_and_path: Callable[[X], Tuple[Type[Y],str]], raise_error: bool) -> "Stream[Y]":
         def iterator() -> Iterator[Y]:
@@ -468,7 +468,7 @@ class Stream(Iterable[X], Generic[X]):
                     y_annotation, path = type_and_path(x)
                     y_type: Type[Y] = y_annotation.mro()[0]
                     with open(path, "rb") as file:
-                        y: Y = dill.load(file)
+                        y: Y = pickle.load(file)
                         if isinstance(y, y_type):
                             yield y
                         else:

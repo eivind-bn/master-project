@@ -9,12 +9,11 @@ from .feed_forward import FeedForward
 from .optimizer import SGD, Adam, RMSprop
 from .activation import Activation, ActivationModule
 from .stream import Stream
+from . import Device, get_device
 
 import torch
 import copy
 import math
-
-Device = Literal["cpu", "cuda", "cuda:0", "cuda:1", "auto"]
 
 P = TypeVar("P", bound="Policy")
 
@@ -140,8 +139,7 @@ class Policy(ABC):
             normalize:          float|None = None,
             set_device:         bool = True) -> Self:
         
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = get_device(device)
 
         if hidden_activation is not None:
             hidden_activation = ActivationModule.get(hidden_activation)
