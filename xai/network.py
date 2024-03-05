@@ -1,4 +1,5 @@
 from typing import *
+from dataclasses import dataclass
 from numpy import ndarray
 from numpy.typing import NDArray
 from torch import Tensor
@@ -17,6 +18,21 @@ Sy = TypeVar("Sy", bound=Ints)
 Sz = TypeVar("Sz", bound=Ints)
 
 class Network(Generic[Sx,Sy]):
+    @dataclass
+    class FeedForward:
+        _input:      Tensor
+        _output:    Callable[[], Tensor]|Tensor
+
+        @property
+        def input(self) -> Tensor:
+            return self._input
+
+        @property
+        def output(self) -> Tensor:
+            if not isinstance(self._output, Tensor):
+                self._output = self._output()
+
+            return self._output
 
     def __init__(self, 
                  device:        Device,
@@ -133,24 +149,33 @@ class Network(Generic[Sx,Sy]):
         for module in self.modules():
             for param in module.parameters():
                 yield param
-        
-    def __call__(self, array: NDArray[Any]|Tensor) -> Tensor:
+
+    def _to_tensor(self, array: NDArray[Any]|Tensor) -> Tensor:
         if isinstance(array, ndarray):
             array = torch.from_numpy(array)
 
-        array = array.to(dtype=torch.float32, device=self._device)
-        input_shape = tuple(array.shape)
+        return array.to(dtype=torch.float32, device=self._device)
+        
+    def __call__(self, array: NDArray[Any]|Tensor) -> FeedForward:
+        input: Tensor = self._to_tensor(array)
+        input_shape = tuple(input.shape)
+
+        def forward(tensor: Tensor) -> Tensor:
+            for layer in self._logits:
+                tensor = layer(tensor)
+            return tensor
 
         if input_shape[1:] == self._input_shape:
-            Z = array
-            for layer in self._logits:
-                Z = layer(Z)
-            return Z
+            return self.FeedForward(
+                _input=input,
+                _output=lambda: forward(input)
+            )
         elif input_shape == self._input_shape:
-            Z = array.unsqueeze(0)
-            for layer in self._logits:
-                Z = layer(Z)
-            return Z.squeeze(0)
+            input = input.unsqueeze(0)
+            return self.FeedForward(
+                _input=input,
+                _output=lambda: forward(input).squeeze(0)
+            )
         else:
             raise ValueError(f"Incorrect input-shape: {input_shape}, expected: {self._input_shape}")
 
