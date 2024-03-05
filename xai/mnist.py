@@ -1,5 +1,5 @@
 from typing import *
-from .policy import Policy
+from .network import Network
 from .reflist import RefList
 from .bytes import GigaBytes
 from .explainer import Explainer
@@ -13,11 +13,6 @@ from . import Device, get_device
 import mnist
 import numpy as np
 import torch
-
-PredictType = Literal[
-    "Latent",
-    "Reconstruction", 
-    "Digit"]
 
 class MNIST:
 
@@ -33,18 +28,16 @@ class MNIST:
         labels_one_hot = torch.zeros((self.labels.shape[0],10)).float()
         labels_one_hot[torch.arange(0,self.labels.shape[0]),self.labels.int()] = 1.0
 
-        self.encoder = Policy.new(
-            input_dim=self.image_dim,
-            output_dim=self.latent_dim,
-            hidden_layers=hidden_layers,
-            device=self.device
+        self.encoder = Network.dense(
+            input_dim=(28,28),
+            output_dim=(latent_dim,),
+            device=device
         )
 
-        self.decoder = Policy.new(
-            input_dim=self.encoder.output_dim,
-            output_dim=self.encoder.input_dim,
-            hidden_layers=hidden_layers,
-            device=self.device
+        self.decoder = Network.dense(
+            input_dim=self.encoder.output_shape,
+            output_dim=self,
+            device=device
         )
 
         self.classifier_head = Policy.new(

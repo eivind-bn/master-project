@@ -6,7 +6,6 @@ from .stream import Stream
 
 import torch
 import matplotlib.pyplot as plt
-import shap
 
 class FeedForward:
 

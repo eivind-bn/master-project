@@ -2,54 +2,127 @@ from typing import *
 from numpy import ndarray
 from numpy.typing import NDArray
 from torch import Tensor
-from torch.nn import Parameter, Module
-from xai import Device
+from torch.nn import Parameter, Module, Sequential
+from xai import Device, get_device
 from .optimizer import SGD, Adam, RMSprop
-
+from .activation import Activation, ActivationModule
 import torch
+import dill # type: ignore
 import math
+from numpy.typing import NDArray
 
-Shape = TypeVarTuple("Shape")
-NewShape = TypeVarTuple("NewShape")
-Ints = Tuple[int,...]
+Ints: TypeAlias = Tuple[int,...]
+Sx = TypeVar("Sx", bound=Ints)
+Sy = TypeVar("Sy", bound=Ints)
+Sz = TypeVar("Sz", bound=Ints)
 
-class Network(Generic[*Shape]):
+class Network(Generic[Sx,Sy]):
 
     def __init__(self, 
-                 device:    Device,
-                 *shape:    *Shape) -> None:
+                 device:        Device,
+                 input_shape:        Sx,
+                 output_shape:       Sy) -> None:
         
-        self._typed_shape = shape
         self._logits: Tuple[Callable[[Tensor],Tensor],...] = tuple()
-        self._rank = 1
+        self._device = get_device(device)
+        self._input_shape = input_shape
+        self._output_shape = output_shape
+        self._items = 1
         
-        def shape_calc() -> Iterator[int]:
-            for dim in shape:
-                if isinstance(dim, int) and dim > 0:
-                    self._rank *= dim
-                    yield dim
-                else:
-                    raise TypeError(f"Shape axis must be int type, not {type(dim)}")
+        for dim in self._output_shape:
+            if dim > 0:
+                self._items *= dim
+            else:
+                raise ValueError(f"Shape axis must be positive, not {dim}")
+            
+    @property
+    def input_shape(self) -> Sx:
+        return self._input_shape
+    
+    @property
+    def output_shape(self) -> Sy:
+        return self._output_shape
+            
+    @staticmethod
+    def new(device: Device, input_shape: Sx) -> "Network[Sx,Sx]":
+        return Network(
+            device=device,
+            input_shape=input_shape,
+            output_shape=input_shape
+        )
+            
+    @staticmethod
+    def dense(input_dim:          Sx,
+              output_dim:         Sy,
+              hidden_layers:      int|Sequence[int] = 2,
+              hidden_activation:  Activation|None = "ReLU",
+              output_activation:  Activation|None = None,
+              device:             Device = "auto") -> "Network[Sx,Sy]":
 
-        self._input_shape = tuple(shape_calc())
-        self._output_shape = self._input_shape
-        self._device = device
+        network = Network.new(device, input_dim).flatten()
 
-    def reshape(self: "Network[*Ints]", *shape: *NewShape) -> "Network[*NewShape]":
-        network = self._appended(lambda tensor: tensor.reshape(cast(Tuple[int,...], shape)), *shape)
-        assert self._rank == network._rank, f"New rank: {network._rank} differs from current rank: {self._rank}"
+        I = math.prod(input_dim)
+        O = math.prod(output_dim)
+
+        if isinstance(hidden_layers, Sequence):
+            layers = list(hidden_layers) + [O]
+        else:
+            N = hidden_layers + 1
+            layers = [int(I - ((I - O)*n)/(N)) for n in range(1, N)] + [O]
+
+        for layer in layers[:-1]:
+            network = network.linear(layer)
+            if hidden_activation:
+                network = network.activation(hidden_activation)
+
+        network = network.linear(layers[-1])
+
+        if output_activation:
+            network = network.activation(output_activation)
+            
+        return network.reshape(output_dim)
+
+    def reshape(self, shape: Sz) -> "Network[Sx,Sz]":
+        items = 1
+        new_shape = list(shape)
+        unknown_dims: List[int] = []
+
+        for i,d in enumerate(new_shape):
+            if d != -1:
+                items *= d
+            else:
+                unknown_dims.append(i)
+
+        if len(unknown_dims) > 1:
+            raise ValueError(f"Too many unknown dims: {len(unknown_dims)}. Max one permitted.")
+        
+        for unknown_dim in unknown_dims:
+            if self._items % items == 0:
+                new_shape[unknown_dim] = self._items // items
+            else:
+                raise ValueError(f"Cannot infer new dim")
+            
+        shape = cast(Sz, tuple(new_shape))
+
+        network = self._appended(lambda tensor: tensor.reshape(shape), shape)
+        assert self._items == network._items, f"New rank: {network._items} differs from current rank: {self._items}"
         return network
+    
+    def flatten(self) -> "Network[Sx,Tuple[int]]":
+        return self.reshape((-1,))
 
-    def linear(self: "Network[int]", dim: int) -> "Network[int]":
+    def linear(self: "Network[Sx,Tuple[int]]", dim: int) -> "Network[Sx,Tuple[int]]":
         assert len(self._output_shape) == 1, f"Output dim must be flattened, but is: {self._output_shape}"
-        return self._appended(torch.nn.Linear(self._input_shape[0], dim, device=self._device), dim)
+        return self._appended(torch.nn.Linear(self._output_shape[0], dim, device=self._device), (dim,))
     
-    def relu(self) -> "Network[*Shape]":
-
-        return self._appended(torch.nn.ReLU(), *self._typed_shape)
+    def relu(self) -> "Network[Sx,Sy]":
+        return self.activation("ReLU")
     
-    def sigmoid(self) -> "Network[*Shape]":
-        return self._appended(torch.nn.Sigmoid(), *self._typed_shape)
+    def sigmoid(self) -> "Network[Sx,Sy]":
+        return self.activation("Sigmoid")
+    
+    def activation(self, name: Activation) -> "Network[Sx,Sy]":
+        return self._appended(ActivationModule.get(name), self._output_shape)
     
     def modules(self) -> Iterator[Module]:
         for layer in self._logits:
@@ -66,45 +139,93 @@ class Network(Generic[*Shape]):
             array = torch.from_numpy(array)
 
         array = array.to(dtype=torch.float32, device=self._device)
+        input_shape = tuple(array.shape)
 
-        if array.shape[1:] == self._input_shape:
+        if input_shape[1:] == self._input_shape:
             Z = array
             for layer in self._logits:
                 Z = layer(Z)
             return Z
-        elif array.shape == self._input_shape:
+        elif input_shape == self._input_shape:
             Z = array.unsqueeze(0)
             for layer in self._logits:
                 Z = layer(Z)
             return Z.squeeze(0)
         else:
-            raise ValueError(f"Incorrect input-shape: {array.shape}, expected: {self._input_shape}")
+            raise ValueError(f"Incorrect input-shape: {input_shape}, expected: {self._input_shape}")
 
-    def __add__(self, other: "Network[*NewShape]") -> "Network[*NewShape]":
-        assert self._output_shape == other._input_shape
-        return self._extended(other._logits, *other._typed_shape)
+    def __add__(self, other: "Network[Sy,Sz]") -> "Network[Sx,Sz]":
+        if self._output_shape != other._input_shape:
+            raise ValueError(f"Incompatible operand shape: {self._output_shape} != {other._input_shape}")
+        
+        return self._extended(other._logits, other._output_shape)
     
     def _extended(self, 
                   logits:       Tuple[Callable[[Tensor],Tensor],...], 
-                  *new_shape:   *NewShape) -> "Network[*NewShape]":
-        
-        network = Network(self._device, *new_shape)
+                  new_shape:    Sz) -> "Network[Sx,Sz]":
+        network = Network(
+            device=self._device,
+            input_shape=self._input_shape,
+            output_shape=new_shape
+        )
         network._logits = self._logits + logits
-        network._input_shape = self._input_shape
         return network
     
     def _appended(self,
                   f:            Callable[[Tensor],Tensor],
-                  *new_shape:   *NewShape) -> "Network[*NewShape]":
-        return self._extended((f,), *new_shape)
+                  new_shape:   Sz) -> "Network[Sx,Sz]":
+        return self._extended((f,), new_shape)
 
     def save(self, path: str) -> None:
-        torch.save(self, path)
+        with open(path, "w+b") as file:
+            dill.dump(self, file)
+
+    def __repr__(self) -> str:
+        return str(Sequential(*self.modules()))
+    
+    @overload
+    @classmethod
+    def load(cls, 
+             path: str, 
+             *, 
+             input_shape: Sx, 
+             output_shape: Sy) -> "Network[Sx,Sy]": ...
+
+    @overload
+    @classmethod
+    def load(cls, 
+             path: str, 
+             *, 
+             input_shape: Sx) -> "Network[Sx, Ints]": ...
+
+    @overload
+    @classmethod
+    def load(cls, 
+             path: str, 
+             *, 
+             output_shape: Sy) -> "Network[Ints, Sy]": ...
+
+    @overload
+    @classmethod
+    def load(cls, 
+             path: str) -> "Network[Ints, Ints]": ...
 
     @classmethod
-    def load(cls, path: str) -> Self:
-        network: Self = torch.load(path)
+    def load(cls, 
+             path: str, 
+             *, 
+             input_shape: Sx|None = None, 
+             output_shape: Sy|None = None) -> "Network":
+        with open(path, "rb") as file:
+            network: Network = dill.load(file)
+
         if isinstance(network, cls):
-            return network
+            if input_shape and input_shape != network._input_shape:
+                raise TypeError(f"Unpickled object has incorrect input-shape: {input_shape}, should be: {network._input_shape}")  
+            
+            if output_shape and output_shape != network._output_shape:
+                raise TypeError(f"Unpickled object has incorrect output-shape: {output_shape}, should be: {network._output_shape}")  
+
+            return cast(Network[Any,Any], network)
         else:
             raise TypeError(f"Unpickled object is of incorrect type: {type(network)}")
