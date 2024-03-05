@@ -1,13 +1,26 @@
 from typing import *
+from dataclasses import dataclass
+from torch import Tensor
+from numpy.typing import NDArray
 
-from .network import Network
+from .network import Network, Ints
 from .activation import Activation
 from . import Device
 
 Sx = TypeVar("Sx", bound=Tuple[int,...])
-Sy = TypeVar("Sy", bound=Tuple[int,...])
+Sy = TypeVar("Sy", bound=Tuple[int,...]) 
 
-class AutoEncoder(Generic[Sx,Sy]):
+class AutoEncoder(Network[Sx,Sy]):
+    @dataclass
+    class FeedForward(Network.FeedForward):
+        _embedding:    Callable[[], Tensor]|Tensor
+
+        @property
+        def embedding(self) -> Tensor:
+            if not isinstance(self._embedding, Tensor):
+                self._embedding = self._embedding()
+
+            return self._embedding
 
     def __init__(self, 
                  data_shape:        Sx, 
@@ -16,6 +29,8 @@ class AutoEncoder(Generic[Sx,Sy]):
                  hidden_activation: Activation|None = "ReLU",
                  output_activation: Activation|None = None,
                  device:            Device = "auto") -> None:
+        
+        self.latent_shape = latent_shape
         
         self.encoder = Network.dense(
             input_dim=data_shape,
@@ -35,7 +50,12 @@ class AutoEncoder(Generic[Sx,Sy]):
             device=device
         )
 
-        self.autoencoder = self.encoder + self.decoder
-
-    def __call__(self, tensor: Tensor) -> Tensor:
-        
+    def __call__(self, array: NDArray[Any]|Tensor) -> FeedForward:
+        input = self._to_tensor(array)
+        encoding = self.encoder(input)
+        decoding = self.decoder(encoding.output)
+        return self.FeedForward(
+            _input=input,
+            _embedding=lambda: encoding.output,
+            _output=lambda: decoding.output,
+        )
