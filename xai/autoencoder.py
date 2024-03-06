@@ -3,24 +3,19 @@ from dataclasses import dataclass
 from torch import Tensor
 from numpy.typing import NDArray
 
-from .network import Network, Ints
+from .network import Network, Ints, Array
 from .activation import Activation
 from . import Device
+from .lazy import Lazy
 
 Sx = TypeVar("Sx", bound=Tuple[int,...])
 Sy = TypeVar("Sy", bound=Tuple[int,...]) 
 
-class AutoEncoder(Network[Sx,Sy]):
+class AutoEncoder(Generic[Sx,Sy], Network[Sx,Sx]):
     @dataclass
     class FeedForward(Network.FeedForward):
-        _embedding:    Callable[[], Tensor]|Tensor
-
-        @property
-        def embedding(self) -> Tensor:
-            if not isinstance(self._embedding, Tensor):
-                self._embedding = self._embedding()
-
-            return self._embedding
+        embedding:      Lazy[Tensor]
+        reconstruction: Lazy[Tensor]
 
     def __init__(self, 
                  data_shape:        Sx, 
@@ -50,12 +45,29 @@ class AutoEncoder(Network[Sx,Sy]):
             device=device
         )
 
-    def __call__(self, array: NDArray[Any]|Tensor) -> FeedForward:
-        input = self._to_tensor(array)
+    @property
+    def logits(self) -> Tuple[Callable[[Tensor],Tensor],...]:
+        return (self.encoder + self.decoder).logits
+            
+    @property
+    def device(self) -> Device:
+        return self.encoder.device
+   
+    @property
+    def input_shape(self) -> Sx:
+        return self.encoder.input_shape
+    
+    @property
+    def output_shape(self) -> Sx:
+        return self.decoder.output_shape
+
+    def __call__(self, array: Array|Lazy[Array]) -> FeedForward:
+        input: Lazy[Tensor] = Lazy(lambda: array).map(self._to_tensor)
         encoding = self.encoder(input)
         decoding = self.decoder(encoding.output)
         return self.FeedForward(
-            _input=input,
-            _embedding=lambda: encoding.output,
-            _output=lambda: decoding.output,
+            input=input,
+            embedding=Lazy(encoding.output),
+            reconstruction=Lazy(decoding.output),
+            output=Lazy(decoding.output),
         )

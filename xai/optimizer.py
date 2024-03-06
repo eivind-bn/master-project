@@ -11,10 +11,11 @@ from .feed_forward import FeedForward
 from .stats import TrainStats
 from .reflist import RefList
 
+
 import torch
 
 if TYPE_CHECKING:
-    from .policy import Policy
+    from .network import Network
 
 T = TypeVar("T", contravariant=True)
 P = TypeVar("P", covariant=True)
@@ -28,14 +29,12 @@ class Optimizer(ABC):
 
     def __init__(self, 
                  optimizer_type:    Type[TorchOptimizer], 
-                 policy:            "Policy",
-                 set_device:        bool,
+                 network:            "Network",
                  **hyperparameters: Any) -> None:
         
         self._optimizer_type = optimizer_type
         self._optimizer: TorchOptimizer|None = None
-        self._policy = policy
-        self._set_device = set_device
+        self._network = network
 
         self._param_values: Dict[str,Any] = {}
         self._param_callables: Dict[str,ParamCall[Any,Any]] = {}
@@ -53,7 +52,7 @@ class Optimizer(ABC):
             for key,callable_value in self._param_callables.items():
                 params[key] = callable_value(step, params)
 
-            self._optimizer = self._optimizer_type(self._policy.network.parameters(), **params)
+            self._optimizer = self._optimizer_type(self._network.parameters(), **params)
         else:
             for param_group in self._optimizer.param_groups:
 
@@ -76,13 +75,13 @@ class Optimizer(ABC):
         
         def get_index_access_function(array: Tensor|ndarray|FeedForward|Sequence[Tensor]|Iterable[Tensor]) -> Tuple[int, Callable[[Tensor],Tensor]]:
             if isinstance(array, FeedForward):
-                tensor = array.tensor(True).to(device=self._policy.device, dtype=torch.float32)
+                tensor = array.tensor(True).to(device=self._network.device, dtype=torch.float32)
                 return tensor.shape[0], lambda indices: tensor[indices]
             elif isinstance(array, ndarray):
-                tensor = torch.from_numpy(array).to(device=self._policy.device, dtype=torch.float32)
+                tensor = torch.from_numpy(array).to(device=self._network.device, dtype=torch.float32)
                 return tensor.shape[0], lambda indices: tensor[indices]
             elif isinstance(array, Tensor):
-                tensor = array.to(device=self._policy.device, dtype=torch.float32)
+                tensor = array.to(device=self._network.device, dtype=torch.float32)
                 return array.shape[0], lambda indices: array[indices]
             elif isinstance(array, Iterable):
                 iterator = iter(array)
@@ -90,13 +89,13 @@ class Optimizer(ABC):
                     tensors: List[Tensor] = []
                     for _,tensor in zip(indices, iterator):
                         tensors.append(tensor)
-                    return torch.stack(tensors).to(device=self._policy.device, dtype=torch.float32)
+                    return torch.stack(tensors).to(device=self._network.device, dtype=torch.float32)
                 
                 return batch_size, access
             else:
                 def access(indices: Tensor) -> Tensor:
                     indices_list: List[int] = indices.tolist()
-                    return torch.stack([array[index] for index in indices_list]).to(device=self._policy.device, dtype=torch.float32)
+                    return torch.stack([array[index] for index in indices_list]).to(device=self._network.device, dtype=torch.float32)
                 return len(array), access
         
         X_len, get_X = get_index_access_function(X)
@@ -117,7 +116,7 @@ class Optimizer(ABC):
                 optimizer = self.get_optimizer(epoch)
                 optimizer.zero_grad()
                 x,y = mini_batch()
-                y_hat = self._policy(x).tensor(False)
+                y_hat = self._network(x).output()
                 loss: Tensor = loss_function(y_hat, y)
                 losses.append(float(loss.item()))
                 loss.backward()
@@ -140,10 +139,9 @@ class SGD(Optimizer):
         nesterov:       Param[bool,"SGD.Params"]
 
     def __init__(self, 
-                 policy:            "Policy", 
-                 set_device:        bool,
+                 network:            "Network", 
                  **params:          Unpack[Params]) -> None:
-        super().__init__(torch.optim.SGD, policy, set_device, **params)
+        super().__init__(torch.optim.SGD, network, **params)
 
 class Adam(Optimizer):
     class Params(TypedDict, total=False):
@@ -159,10 +157,9 @@ class Adam(Optimizer):
         fused:          Param[bool|None,"Adam.Params"]
 
     def __init__(self, 
-                 policy:        "Policy", 
-                 set_device:    bool,
+                 network:        "Network", 
                  **params:      Unpack[Params]) -> None:
-        super().__init__(torch.optim.Adam, policy, set_device, **params)
+        super().__init__(torch.optim.Adam, network, **params)
 
 class RMSprop(Optimizer):
     class Params(TypedDict, total=False):
@@ -174,7 +171,6 @@ class RMSprop(Optimizer):
         centered:       Param[bool, "RMSprop.Params"]
 
     def __init__(self, 
-                 policy:        "Policy", 
-                 set_device:    bool, 
+                 network:        "Network", 
                  **params:      Unpack[Params]) -> None:
-        super().__init__(torch.optim.RMSprop, policy, set_device, **params)
+        super().__init__(torch.optim.RMSprop, network, **params)

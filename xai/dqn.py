@@ -11,7 +11,6 @@ from .asteroids import Asteroids
 from .window import Window, WindowClosed
 from .record import Recorder
 from .observation import Observation
-from .explainer import Explainer
 from .reward import Reward
 from .feed_forward import FeedForward
 from .optimizer import Adam

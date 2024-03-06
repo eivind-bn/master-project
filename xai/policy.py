@@ -26,15 +26,6 @@ class Policy(ABC):
     network:        Sequential
     normalize:      float|None
     set_device:     bool
-
-    def sgd(self, **params: Unpack[SGD.Params]) -> SGD:
-        return SGD(policy=self, set_device=self.set_device, **params)
-    
-    def adam(self, **params: Unpack[Adam.Params]) -> Adam:
-        return Adam(policy=self, set_device=self.set_device, **params)
-    
-    def rms_prop(self, **params: Unpack[RMSprop.Params]) -> RMSprop:
-        return RMSprop(policy=self, set_device=self.set_device, **params)
     
     def predict(self, 
                 X:          Tensor|ndarray|FeedForward, 

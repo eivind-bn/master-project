@@ -1,4 +1,5 @@
 from typing import *
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from numpy import ndarray
 from numpy.typing import NDArray
@@ -7,65 +8,102 @@ from torch.nn import Parameter, Module, Sequential
 from xai import Device, get_device
 from .optimizer import SGD, Adam, RMSprop
 from .activation import Activation, ActivationModule
+from .stream import Stream
+from .lazy import Lazy
 import torch
 import dill # type: ignore
 import math
 from numpy.typing import NDArray
 
+Array: TypeAlias = NDArray[Any]|Tensor
 Ints: TypeAlias = Tuple[int,...]
 Sx = TypeVar("Sx", bound=Ints)
 Sy = TypeVar("Sy", bound=Ints)
 Sz = TypeVar("Sz", bound=Ints)
 
-class Network(Generic[Sx,Sy]):
+class Network(Generic[Sx,Sy], ABC):
     @dataclass
     class FeedForward:
-        _input:      Tensor
-        _output:    Callable[[], Tensor]|Tensor
-
-        @property
-        def input(self) -> Tensor:
-            return self._input
-
-        @property
-        def output(self) -> Tensor:
-            if not isinstance(self._output, Tensor):
-                self._output = self._output()
-
-            return self._output
-
-    def __init__(self, 
-                 device:        Device,
-                 input_shape:        Sx,
-                 output_shape:       Sy) -> None:
+        input:      Lazy[Tensor]
+        output:     Lazy[Tensor]
         
-        self._logits: Tuple[Callable[[Tensor],Tensor],...] = tuple()
-        self._device = get_device(device)
-        self._input_shape = input_shape
-        self._output_shape = output_shape
+        def derivatives(self, to_scalars: Callable[[Tensor],Tensor], max_order: int|None = 1) -> Stream[Tensor]:  
+            def next_derivative() -> Iterator[Tensor]:
+                input = self.input()
+                derivative = self.output()
+                while True:
+                    yield derivative.detach().requires_grad_(False)
+                    wrt = to_scalars(derivative)
+                    input.requires_grad = True
+                    derivative = torch.autograd.grad(
+                        outputs=wrt,
+                        inputs=input,
+                        grad_outputs=torch.ones_like(wrt),
+                        create_graph=True,
+                        retain_graph=True
+                    )[0]
+                    input.requires_grad = False
+
+            if max_order is None:
+                return Stream(next_derivative())
+            else:
+                return Stream(next_derivative()).take(max_order+1)
+            
+        def derivative(self, to_scalars: Callable[[Tensor],Tensor], order: int = 1) -> Tensor:
+            return tuple(self.derivatives(to_scalars, order))[order]
+
+        def gradients(self, to_scalars: Callable[[Tensor],Tensor]) -> Tensor:
+            return self.derivative(to_scalars, order=1)
+        
+        def __repr__(self) -> str:
+            return str(self.output())
+
+    def __init__(self) -> None:
         self._items = 1
         
-        for dim in self._output_shape:
+        for dim in self.output_shape:
             if dim > 0:
                 self._items *= dim
             else:
                 raise ValueError(f"Shape axis must be positive, not {dim}")
+    
+    @abstractmethod
+    @property
+    def logits(self) -> Tuple[Callable[[Tensor],Tensor],...]:
+        pass
             
+    @abstractmethod
+    @property
+    def device(self) -> Device:
+        pass
+
+    @abstractmethod    
     @property
     def input_shape(self) -> Sx:
-        return self._input_shape
+        pass
     
+    @abstractmethod
     @property
     def output_shape(self) -> Sy:
-        return self._output_shape
+        pass
+    
+    def sgd(self, **params: Unpack[SGD.Params]) -> SGD:
+        return SGD(network=self, **params)
+    
+    def adam(self, **params: Unpack[Adam.Params]) -> Adam:
+        return Adam(network=self, **params)
+    
+    def rms_prop(self, **params: Unpack[RMSprop.Params]) -> RMSprop:
+        return RMSprop(network=self, **params)
             
     @staticmethod
     def new(device: Device, input_shape: Sx) -> "Network[Sx,Sx]":
-        return Network(
-            device=device,
-            input_shape=input_shape,
-            output_shape=input_shape
-        )
+        return cast(Network[Sx,Sx], type("EmptyNetwork", (Network,), {
+            "logits": lambda _: tuple(),
+            "device": lambda _: get_device(device),
+            "input_shape": lambda _: input_shape,
+            "output_shape": lambda _: input_shape
+        }))
             
     @staticmethod
     def dense(input_dim:          Sx,
@@ -150,34 +188,39 @@ class Network(Generic[Sx,Sy]):
             for param in module.parameters():
                 yield param
 
-    def _to_tensor(self, array: NDArray[Any]|Tensor) -> Tensor:
+    def _to_tensor(self, array: Array) -> Tensor:
         if isinstance(array, ndarray):
             array = torch.from_numpy(array)
 
         return array.to(dtype=torch.float32, device=self._device)
         
-    def __call__(self, array: NDArray[Any]|Tensor) -> FeedForward:
-        input: Tensor = self._to_tensor(array)
-        input_shape = tuple(input.shape)
+    def __call__(self, array: Array|Lazy[Array]) -> FeedForward:
 
         def forward(tensor: Tensor) -> Tensor:
-            for layer in self._logits:
-                tensor = layer(tensor)
-            return tensor
+            input_shape = tuple(tensor.shape)
+            requires_grad = tensor.requires_grad
+            tensor.requires_grad = True
+            if input_shape[1:] == self._input_shape:
+                Z = tensor
+                for layer in self._logits:
+                    Z = layer(tensor)
+                tensor.requires_grad = requires_grad
+                return Z
+            elif input_shape == self._input_shape:
+                Z = tensor.unsqueeze(0)
+                for layer in self._logits:
+                    Z = layer(tensor)
+                tensor.requires_grad = requires_grad
+                return Z.squeeze(0)
+            else:
+                raise ValueError(f"Incorrect input-shape: {input_shape}, expected: {self._input_shape}")
+        
+        input = Lazy(lambda: array).map(self._to_tensor)
 
-        if input_shape[1:] == self._input_shape:
-            return self.FeedForward(
-                _input=input,
-                _output=lambda: forward(input)
-            )
-        elif input_shape == self._input_shape:
-            input = input.unsqueeze(0)
-            return self.FeedForward(
-                _input=input,
-                _output=lambda: forward(input).squeeze(0)
-            )
-        else:
-            raise ValueError(f"Incorrect input-shape: {input_shape}, expected: {self._input_shape}")
+        return self.FeedForward(
+            input=input,
+            output=input.map(forward)
+        )
 
     def __add__(self, other: "Network[Sy,Sz]") -> "Network[Sx,Sz]":
         if self._output_shape != other._input_shape:
@@ -188,13 +231,12 @@ class Network(Generic[Sx,Sy]):
     def _extended(self, 
                   logits:       Tuple[Callable[[Tensor],Tensor],...], 
                   new_shape:    Sz) -> "Network[Sx,Sz]":
-        network = Network(
+        return Network(
+            logits=self._logits + logits,
             device=self._device,
             input_shape=self._input_shape,
             output_shape=new_shape
         )
-        network._logits = self._logits + logits
-        return network
     
     def _appended(self,
                   f:            Callable[[Tensor],Tensor],
