@@ -8,13 +8,15 @@ from xai import Device
 from xai.network import Network
 import torch
 import math
+from abc import ABC, abstractmethod
 
-f1 = Network.dense((100,100), (3,), device="cuda")
-f2 = Network.dense((3,), (100,100), device="cuda", output_activation="Sigmoid")
 
-f1 + f2
-# %%
 
-(f1 + f2)(torch.ones((100,100)))
-
+network = type("EmptyNetwork", (Network,), {
+    "logits": lambda _: tuple(),
+    "device": lambda _: "cuda",
+    "input_shape": lambda _: (28,28),
+    "output_shape": lambda _: (10,)
+})(logits=tuple(), device="auto", input_shape=(12,34), output_shape=(12,34))
+network.save()
 # %%
