@@ -31,7 +31,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
         classification: Lazy[Tensor]
         
         def digits(self) -> Tuple[int,...]:
-            return tuple(self.classification().argmax(dim=1))
+            return tuple(self.classification().reshape((-1,10)).argmax(dim=1))
 
     def __init__(self, 
                  latent_shape:      Sl,
@@ -40,12 +40,18 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
                  output_activation: Activation|None = None,
                  device:            Device = "auto") -> None:
 
-        images = torch.from_numpy(mnist.train_images()).to(device=device, dtype=torch.float32)
-        images = images/255.0
+        self._device = get_device(device)
+        data = torch.from_numpy(mnist.train_images()).to(device=self.device, dtype=torch.float32)
+        data = data/255.0
+        indices = torch.randperm(len(data))
+        train_portion = int(len(indices)*0.8)
 
-        self.labels = torch.from_numpy(mnist.train_labels())
-        labels_one_hot = torch.zeros((self.labels.shape[0],10)).float()
-        labels_one_hot[torch.arange(0,self.labels.shape[0]),self.labels.int()] = 1.0
+        self.train_data = data[indices[:train_portion]]
+        self.val_data = data[indices[train_portion:]]
+
+        labels = torch.from_numpy(mnist.train_labels()).to(device=self.device, dtype=torch.long)
+        self.train_labels = labels[indices[:train_portion]]
+        self.val_labels = labels[indices[train_portion:]]
 
         self.autoencoder = AutoEncoder(
             data_shape=self.input_shape,
@@ -55,34 +61,65 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
             output_activation=output_activation,
             device=device
         )
+        self.autoencoder_optimizer = self.autoencoder.adam()
 
         self.classifier_head = Network.dense(
             input_dim=self.autoencoder.latent_shape,
-            output_dim=(10,),
+            output_dim=self.output_shape,
             hidden_layers=hidden_layers,
             hidden_activation=hidden_activation,
             output_activation=output_activation,
             device=device
         )
+        self.classifier_head_optimizer = self.classifier_head.adam()
 
-        super().__init__(
-            logits=(self.autoencoder.encoder + self.classifier_head).logits,
-            input_shape=(28,28),
-            output_shape=(10,),
-            device=device
-        )
+    @property
+    def logits(self) -> Tuple[Callable[[Tensor],Tensor],...]:
+        return (self.autoencoder.encoder + self.classifier_head).logits
+            
+    @property
+    def device(self) -> Device:
+        return self._device
+   
+    @property
+    def input_shape(self) -> Sx:
+        return (28,28)
     
-    def fit_autoencoder(self, **params: Unpack[Adam.Params]) -> None:
-        self.autoencoder.adam(**params).fit()
+    @property
+    def output_shape(self) -> Sy:
+        return (10,)
+    
+    def fit_autoencoder(self, 
+                        epochs: int,
+                        batch_size: int,
+                        loss_criterion: Loss,
+                        verbose: bool = False,
+                        info: str | None = None) -> TrainStats:
+          return self.autoencoder_optimizer.fit(
+             X=self.train_data,
+             Y=self.train_data,
+             epochs=epochs,
+             batch_size=batch_size,
+             loss_criterion=loss_criterion,
+             verbose=verbose,
+             info=info
+         )
     
     def fit_classifier(self, 
                        epochs: int,
                        batch_size: int,
                        loss_criterion: Loss,
                        verbose: bool = False,
-                       info: str | None = None,
-                       **params: Unpack[Adam.Params]) -> None:
-        self.classifier_head.adam(**params).fit()
+                       info: str | None = None) -> TrainStats:
+         return self.classifier_head_optimizer.fit(
+             X=self(self.train_data).embedding(),
+             Y=torch.nn.functional.one_hot(self.train_labels, num_classes=10).float(),
+             epochs=epochs,
+             batch_size=batch_size,
+             loss_criterion=loss_criterion,
+             verbose=verbose,
+             info=info
+         )
 
     def __call__(self, array: Array|Lazy[Array]) -> FeedForward:
         input = Lazy(lambda: array).map(self._to_tensor)

@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import *
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -67,23 +68,23 @@ class Network(Generic[Sx,Sy], ABC):
             else:
                 raise ValueError(f"Shape axis must be positive, not {dim}")
     
-    @abstractmethod
     @property
+    @abstractmethod
     def logits(self) -> Tuple[Callable[[Tensor],Tensor],...]:
         pass
             
-    @abstractmethod
     @property
+    @abstractmethod
     def device(self) -> Device:
         pass
 
-    @abstractmethod    
     @property
+    @abstractmethod  
     def input_shape(self) -> Sx:
         pass
     
-    @abstractmethod
     @property
+    @abstractmethod
     def output_shape(self) -> Sy:
         pass
     
@@ -97,13 +98,25 @@ class Network(Generic[Sx,Sy], ABC):
         return RMSprop(network=self, **params)
             
     @staticmethod
-    def new(device: Device, input_shape: Sx) -> "Network[Sx,Sx]":
-        return cast(Network[Sx,Sx], type("EmptyNetwork", (Network,), {
-            "logits": lambda _: tuple(),
-            "device": lambda _: get_device(device),
-            "input_shape": lambda _: input_shape,
-            "output_shape": lambda _: input_shape
-        }))
+    def new(device: Device, input_shape: Sx) -> Network[Sx,Sx]:
+        class EmptyNetwork(Network[Sx,Sx]):
+                @property
+                def logits(_) -> Tuple[Callable[[Tensor],Tensor],...]:
+                    return tuple()
+                        
+                @property
+                def device(_) -> Device:
+                    return get_device(device)
+    
+                @property
+                def input_shape(_) -> Sx:
+                    return input_shape
+                
+                @property
+                def output_shape(_) -> Sx:
+                    return input_shape
+
+        return EmptyNetwork()
             
     @staticmethod
     def dense(input_dim:          Sx,
@@ -158,16 +171,16 @@ class Network(Generic[Sx,Sy], ABC):
             
         shape = cast(Sz, tuple(new_shape))
 
-        network = self._appended(lambda tensor: tensor.reshape(shape), shape)
+        network = self._appended(lambda tensor: tensor.reshape((-1,) + shape), shape)
         assert self._items == network._items, f"New rank: {network._items} differs from current rank: {self._items}"
         return network
     
     def flatten(self) -> "Network[Sx,Tuple[int]]":
-        return self.reshape((-1,))
+        return self.reshape((math.prod(self.input_shape),))
 
     def linear(self: "Network[Sx,Tuple[int]]", dim: int) -> "Network[Sx,Tuple[int]]":
-        assert len(self._output_shape) == 1, f"Output dim must be flattened, but is: {self._output_shape}"
-        return self._appended(torch.nn.Linear(self._output_shape[0], dim, device=self._device), (dim,))
+        assert len(self.output_shape) == 1, f"Output dim must be flattened, but is: {self.output_shape}"
+        return self._appended(torch.nn.Linear(self.output_shape[0], dim, device=self.device), (dim,))
     
     def relu(self) -> "Network[Sx,Sy]":
         return self.activation("ReLU")
@@ -176,10 +189,10 @@ class Network(Generic[Sx,Sy], ABC):
         return self.activation("Sigmoid")
     
     def activation(self, name: Activation) -> "Network[Sx,Sy]":
-        return self._appended(ActivationModule.get(name), self._output_shape)
+        return self._appended(ActivationModule.get(name), self.output_shape)
     
     def modules(self) -> Iterator[Module]:
-        for layer in self._logits:
+        for layer in self.logits:
             if isinstance(layer, Module):
                 yield layer
     
@@ -192,28 +205,24 @@ class Network(Generic[Sx,Sy], ABC):
         if isinstance(array, ndarray):
             array = torch.from_numpy(array)
 
-        return array.to(dtype=torch.float32, device=self._device)
+        return array.to(dtype=torch.float32, device=self.device)
         
     def __call__(self, array: Array|Lazy[Array]) -> FeedForward:
 
         def forward(tensor: Tensor) -> Tensor:
-            input_shape = tuple(tensor.shape)
-            requires_grad = tensor.requires_grad
-            tensor.requires_grad = True
-            if input_shape[1:] == self._input_shape:
+            tensor = tensor.requires_grad_(True)
+            if tensor.shape[1:] == self.input_shape:
                 Z = tensor
-                for layer in self._logits:
-                    Z = layer(tensor)
-                tensor.requires_grad = requires_grad
+                for layer in self.logits:
+                    Z = layer(Z)
                 return Z
-            elif input_shape == self._input_shape:
+            elif tensor.shape == self.input_shape:
                 Z = tensor.unsqueeze(0)
-                for layer in self._logits:
-                    Z = layer(tensor)
-                tensor.requires_grad = requires_grad
+                for layer in self.logits:
+                    Z = layer(Z)
                 return Z.squeeze(0)
             else:
-                raise ValueError(f"Incorrect input-shape: {input_shape}, expected: {self._input_shape}")
+                raise ValueError(f"Incorrect input-shape: {tuple(tensor.shape)}, expected: {self.input_shape}")
         
         input = Lazy(lambda: array).map(self._to_tensor)
 
@@ -223,20 +232,33 @@ class Network(Generic[Sx,Sy], ABC):
         )
 
     def __add__(self, other: "Network[Sy,Sz]") -> "Network[Sx,Sz]":
-        if self._output_shape != other._input_shape:
-            raise ValueError(f"Incompatible operand shape: {self._output_shape} != {other._input_shape}")
+        if self.output_shape != other.input_shape:
+            raise ValueError(f"Incompatible operand shape: {self.output_shape} != {other.input_shape}")
         
-        return self._extended(other._logits, other._output_shape)
+        return self._extended(other.logits, other.output_shape)
     
     def _extended(self, 
                   logits:       Tuple[Callable[[Tensor],Tensor],...], 
                   new_shape:    Sz) -> "Network[Sx,Sz]":
-        return Network(
-            logits=self._logits + logits,
-            device=self._device,
-            input_shape=self._input_shape,
-            output_shape=new_shape
-        )
+        
+        class SingleHeadedNetwork(Network[Sx,Sz]):
+            @property
+            def logits(_) -> Tuple[Callable[[Tensor],Tensor],...]:
+                return self.logits + logits
+                    
+            @property
+            def device(_) -> Device:
+                return get_device(self.device)
+
+            @property
+            def input_shape(_) -> Sx:
+                return self.input_shape
+            
+            @property
+            def output_shape(_) -> Sz:
+                return new_shape
+
+        return SingleHeadedNetwork()
     
     def _appended(self,
                   f:            Callable[[Tensor],Tensor],
@@ -287,11 +309,11 @@ class Network(Generic[Sx,Sy], ABC):
             network: Network = dill.load(file)
 
         if isinstance(network, cls):
-            if input_shape and input_shape != network._input_shape:
-                raise TypeError(f"Unpickled object has incorrect input-shape: {input_shape}, should be: {network._input_shape}")  
+            if input_shape and input_shape != network.input_shape:
+                raise TypeError(f"Unpickled object has incorrect input-shape: {input_shape}, should be: {network.input_shape}")  
             
-            if output_shape and output_shape != network._output_shape:
-                raise TypeError(f"Unpickled object has incorrect output-shape: {output_shape}, should be: {network._output_shape}")  
+            if output_shape and output_shape != network.output_shape:
+                raise TypeError(f"Unpickled object has incorrect output-shape: {output_shape}, should be: {network.output_shape}")  
 
             return cast(Network[Any,Any], network)
         else:

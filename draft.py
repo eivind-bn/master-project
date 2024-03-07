@@ -9,14 +9,25 @@ from xai.network import Network
 import torch
 import math
 from abc import ABC, abstractmethod
+from xai.autoencoder import AutoEncoder
+from xai.mnist import MNIST
+import matplotlib.pyplot as plt
 
+mnist = MNIST((5,), output_activation="Sigmoid")
+mnist
 
+# %%
+mnist.fit_autoencoder(3000, 128, "MSELoss", verbose=True).plot_loss()
+# %%
+mnist.fit_classifier(3000, 128, "CrossEntropyLoss", verbose=True).plot_loss()
 
-network = type("EmptyNetwork", (Network,), {
-    "logits": lambda _: tuple(),
-    "device": lambda _: "cuda",
-    "input_shape": lambda _: (28,28),
-    "output_shape": lambda _: (10,)
-})(logits=tuple(), device="auto", input_shape=(12,34), output_shape=(12,34))
-network.save()
+# %%
+
+X = mnist.train_data[990]
+Y = mnist(X)
+image = torch.hstack([X,Y.reconstruction()]).cpu()
+
+Y.digits(), plt.imshow(image.numpy(force=True))
+# %%
+plt.imshow(mnist(mnist.train_data[990]).reconstruction().numpy(force=True))
 # %%
