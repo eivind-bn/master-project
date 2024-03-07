@@ -65,51 +65,34 @@ class Optimizer(ABC):
         return self._optimizer
 
     def fit(self, 
-            X:              Tensor|ndarray|FeedForward|Sequence[Tensor]|Iterable[Tensor], 
-            Y:              Tensor|ndarray|FeedForward|Sequence[Tensor]|Iterable[Tensor], 
+            X:              Tensor|ndarray, 
+            Y:              Tensor|ndarray, 
             epochs:         int, 
             batch_size:     int,
             loss_criterion: Loss,
             verbose:        bool = False,
             info:           str|None = None) -> TrainStats:
         
-        def get_index_access_function(array: Tensor|ndarray|FeedForward|Sequence[Tensor]|Iterable[Tensor]) -> Tuple[int, Callable[[Tensor],Tensor]]:
-            if isinstance(array, FeedForward):
-                tensor = array.tensor(True).to(device=self._network.device, dtype=torch.float32)
-                return tensor.shape[0], lambda indices: tensor[indices]
-            elif isinstance(array, ndarray):
-                tensor = torch.from_numpy(array).to(device=self._network.device, dtype=torch.float32)
-                return tensor.shape[0], lambda indices: tensor[indices]
-            elif isinstance(array, Tensor):
-                tensor = array.to(device=self._network.device, dtype=torch.float32)
-                return array.shape[0], lambda indices: array[indices]
-            elif isinstance(array, Iterable):
-                iterator = iter(array)
-                def access(indices: Tensor) -> Tensor:
-                    tensors: List[Tensor] = []
-                    for _,tensor in zip(indices, iterator):
-                        tensors.append(tensor)
-                    return torch.stack(tensors).to(device=self._network.device, dtype=torch.float32)
-                
-                return batch_size, access
+        assert len(X) == len(Y), f"Length of X={len(X)} differs from length of Y={len(Y)}"
+        assert 0 < batch_size <= len(X), f"{batch_size=} is not between 0 and {len(X)}"
+
+        def prepare_tensor(array: Tensor|ndarray) -> Tensor:
+            if isinstance(array, ndarray):
+                array = torch.from_numpy(X)
             else:
-                def access(indices: Tensor) -> Tensor:
-                    indices_list: List[int] = indices.tolist()
-                    return torch.stack([array[index] for index in indices_list]).to(device=self._network.device, dtype=torch.float32)
-                return len(array), access
-        
-        X_len, get_X = get_index_access_function(X)
-        Y_len, get_Y = get_index_access_function(Y)
-            
-        assert X_len == Y_len, f"{X_len=} differs from {Y_len=}"
-        assert 0 < batch_size <= X_len, f"{batch_size=} is not between 0 and {X_len}"
+                array = array.detach()
+
+            return array.to(device=self._network.device, dtype=torch.float32)
+
+        X = prepare_tensor(X)
+        Y = prepare_tensor(Y)
 
         loss_function = LossModule.get(loss_criterion)
         losses: List[float] = []
         
         def mini_batch() -> Tuple[Tensor,Tensor]:
-            idx = torch.randperm(X_len)[:batch_size]
-            return get_X(idx), get_Y(idx)
+            idx = torch.randperm(len(X))[:batch_size]
+            return X[idx], Y[idx]
 
         with tqdm(total=epochs, desc="Step:", disable=not verbose) as bar:
             for epoch in range(epochs):

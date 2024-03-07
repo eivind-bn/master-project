@@ -62,7 +62,7 @@ class AutoEncoder(Generic[Sx,Sy], Network[Sx,Sx]):
         return self.decoder.output_shape
 
     def __call__(self, array: Array|Lazy[Array]) -> FeedForward:
-        input: Lazy[Tensor] = Lazy(lambda: array).map(self._to_tensor)
+        input = Lazy(lambda: array).map(self._to_tensor)
         encoding = self.encoder(input)
         decoding = self.decoder(encoding.output)
         return self.FeedForward(
