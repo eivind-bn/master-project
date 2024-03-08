@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import *
 from dataclasses import dataclass
 from .network import Network, Array
@@ -14,6 +15,7 @@ from .activation import Activation
 from .autoencoder import AutoEncoder
 from .optimizer import SGD, Adam, RMSprop
 from .loss import Loss
+from .explainer import Explainer, Explanation
 
 import mnist # type: ignore
 import numpy as np
@@ -26,18 +28,24 @@ Sl = TypeVar("Sl", bound=Tuple[int,...])
 class MNIST(Generic[Sl], Network[Sx,Sy]):
     @dataclass
     class FeedForward(Network.FeedForward):
+        _parent:        MNIST
         embedding:      Lazy[Tensor]
         reconstruction: Lazy[Tensor]
         classification: Lazy[Tensor]
         
         def digits(self) -> Tuple[int,...]:
             return tuple(self.classification().reshape((-1,10)).argmax(dim=1))
+        
+        def reconstruction_explanation(self, type: Type[Explainer], verbose: bool = False) -> Tuple[Explanation,...]:
+            return self._parent.reconstruction_explainer(type).explain(self.embedding(), verbose=verbose)
+        
+        def classification_explanation(self, type: Type[Explainer], verbose: bool = False) -> Tuple[Explanation,...]:
+            return self._parent.classifier_head_explainer(type).explain(self.embedding(), verbose=verbose)
 
     def __init__(self, 
                  latent_shape:      Sl,
                  hidden_layers:     int|Sequence[int] = 2,
                  hidden_activation: Activation|None = "ReLU",
-                 output_activation: Activation|None = None,
                  device:            Device = "auto") -> None:
 
         self._device = get_device(device)
@@ -58,7 +66,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
             latent_shape=latent_shape,
             hidden_layers=hidden_layers,
             hidden_activation=hidden_activation,
-            output_activation=output_activation,
+            output_activation="Sigmoid",
             device=device
         )
         self.autoencoder_optimizer = self.autoencoder.adam()
@@ -68,10 +76,13 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
             output_dim=self.output_shape,
             hidden_layers=hidden_layers,
             hidden_activation=hidden_activation,
-            output_activation=output_activation,
+            output_activation="Softmax",
             device=device
         )
         self.classifier_head_optimizer = self.classifier_head.adam()
+
+        self._reconstruction_explainers: Dict[Type[Explainer],Explainer] = {}
+        self._classifier_head_explainer: Dict[Type[Explainer],Explainer] = {}
 
     @property
     def logits(self) -> Tuple[Callable[[Tensor],Tensor],...]:
@@ -89,12 +100,29 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
     def output_shape(self) -> Sy:
         return (10,)
     
+    def reconstruction_explainer(self, type: Type[Explainer]) -> Explainer:
+        explainer = self._reconstruction_explainers.get(type)
+        if explainer is None:
+            explainer = type(self.autoencoder.decoder, self(self.val_data).embedding())
+            self._reconstruction_explainers[type] = explainer
+
+        return explainer
+    
+    def classifier_head_explainer(self, type: Type[Explainer]) -> Explainer:
+        explainer = self._classifier_head_explainer.get(type)
+        if explainer is None:
+            explainer = type(self.classifier_head, self(self.val_data).embedding())
+            self._classifier_head_explainer[type] = explainer
+
+        return explainer
+    
     def fit_autoencoder(self, 
                         epochs: int,
                         batch_size: int,
                         loss_criterion: Loss,
                         verbose: bool = False,
                         info: str | None = None) -> TrainStats:
+          self._reconstruction_explainers.clear()
           return self.autoencoder_optimizer.fit(
              X=self.train_data,
              Y=self.train_data,
@@ -121,16 +149,16 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
              info=info
          )
 
-    def __call__(self, array: Array|Lazy[Array]) -> FeedForward:
-        input = Lazy(lambda: array).map(self._to_tensor)
-        auto_code = self.autoencoder(array)
-        classification = self.classifier_head(auto_code.embedding)
-        return MNIST.FeedForward(
-            input=input,
-            output=Lazy(classification.output),
-            embedding=Lazy(auto_code.embedding),
-            reconstruction=Lazy(auto_code.output),
-            classification=Lazy(classification.output)
+    def __call__(self, X: Array|Lazy[Array]) -> MNIST.FeedForward:
+        autoencoder = self.autoencoder(X)
+        classification = self.classifier_head(autoencoder.embedding)
+        return self.FeedForward(
+            _parent=self,
+            input=autoencoder.input,
+            output=classification.output,
+            embedding=autoencoder.embedding,
+            reconstruction=autoencoder.output,
+            classification=classification.output
         )
 
     

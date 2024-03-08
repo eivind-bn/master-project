@@ -1,16 +1,17 @@
+from __future__ import annotations
 from typing import *
 
 X = TypeVar("X", covariant=True)
-Y = TypeVar("Y")
+Y = TypeVar("Y", covariant=True)
 
 class Lazy(Generic[X]):
 
-    def __init__(self, get_value: "Callable[[],Lazy[X]|X]") -> None:
+    def __init__(self, get_value: Callable[[],Lazy[X]|X]) -> None:
         super().__init__()
         self._get_value = get_value
         self._value: X|None = None
 
-    def map(self, f: Callable[[X],Y]) -> "Lazy[Y]":
+    def map(self, f: Callable[[X],Lazy[Y]|Y]) -> Lazy[Y]:
         return Lazy(lambda: f(self()))
 
     def __call__(self) -> X:
