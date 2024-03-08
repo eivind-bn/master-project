@@ -32,7 +32,6 @@ class AutoEncoder(Generic[Sx,Sy], Network[Sx,Sx]):
             output_dim=latent_shape,
             hidden_layers=hidden_layers,
             hidden_activation=hidden_activation,
-            output_activation=output_activation,
             device=device
         )
 
@@ -61,13 +60,12 @@ class AutoEncoder(Generic[Sx,Sy], Network[Sx,Sx]):
     def output_shape(self) -> Sx:
         return self.decoder.output_shape
 
-    def __call__(self, array: Array|Lazy[Array]) -> FeedForward:
-        input = Lazy(lambda: array).map(self._to_tensor)
-        encoding = self.encoder(input)
+    def __call__(self, X: Array|Lazy[Array]) -> FeedForward:
+        encoding = self.encoder(X)
         decoding = self.decoder(encoding.output)
         return self.FeedForward(
-            input=input,
-            embedding=Lazy(encoding.output),
-            reconstruction=Lazy(decoding.output),
-            output=Lazy(decoding.output),
+            input=encoding.input,
+            embedding=encoding.output,
+            reconstruction=decoding.output,
+            output=decoding.output,
         )

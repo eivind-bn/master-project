@@ -13,7 +13,7 @@ from xai.autoencoder import AutoEncoder
 from xai.mnist import MNIST
 import matplotlib.pyplot as plt
 
-mnist = MNIST((5,), output_activation="Sigmoid")
+mnist = MNIST((5,), hidden_activation="LeakyReLU")
 mnist
 
 # %%
@@ -23,11 +23,10 @@ mnist.fit_classifier(3000, 128, "CrossEntropyLoss", verbose=True).plot_loss()
 
 # %%
 
-X = mnist.train_data[990]
+X = mnist.train_data[750]
 Y = mnist(X)
 image = torch.hstack([X,Y.reconstruction()]).cpu()
 
-Y.digits(), plt.imshow(image.numpy(force=True))
+Y.digits(), plt.imshow(image.numpy(force=True), cmap="gray")
 # %%
-plt.imshow(mnist(mnist.train_data[990]).reconstruction().numpy(force=True))
-# %%
+

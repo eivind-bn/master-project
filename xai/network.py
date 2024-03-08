@@ -11,6 +11,7 @@ from .optimizer import SGD, Adam, RMSprop
 from .activation import Activation, ActivationModule
 from .stream import Stream
 from .lazy import Lazy
+from .explainer import PermutationExplainer
 import torch
 import dill # type: ignore
 import math
@@ -35,7 +36,6 @@ class Network(Generic[Sx,Sy], ABC):
                 while True:
                     yield derivative.detach().requires_grad_(False)
                     wrt = to_scalars(derivative)
-                    input.requires_grad = True
                     derivative = torch.autograd.grad(
                         outputs=wrt,
                         inputs=input,
@@ -43,7 +43,6 @@ class Network(Generic[Sx,Sy], ABC):
                         create_graph=True,
                         retain_graph=True
                     )[0]
-                    input.requires_grad = False
 
             if max_order is None:
                 return Stream(next_derivative())
@@ -176,12 +175,15 @@ class Network(Generic[Sx,Sy], ABC):
         return network
     
     def flatten(self) -> "Network[Sx,Tuple[int]]":
-        return self.reshape((math.prod(self.input_shape),))
+        return self.reshape((-1,))
 
     def linear(self: "Network[Sx,Tuple[int]]", dim: int) -> "Network[Sx,Tuple[int]]":
         assert len(self.output_shape) == 1, f"Output dim must be flattened, but is: {self.output_shape}"
         return self._appended(torch.nn.Linear(self.output_shape[0], dim, device=self.device), (dim,))
     
+    def permutation_explainer(self, background: Array) -> PermutationExplainer[Sx,Sy]:
+        return PermutationExplainer(network=self, background=background)
+
     def relu(self) -> "Network[Sx,Sy]":
         return self.activation("ReLU")
     
@@ -207,7 +209,7 @@ class Network(Generic[Sx,Sy], ABC):
 
         return array.to(dtype=torch.float32, device=self.device)
         
-    def __call__(self, array: Array|Lazy[Array]) -> FeedForward:
+    def __call__(self, X: Array|Lazy[Array]) -> FeedForward:
 
         def forward(tensor: Tensor) -> Tensor:
             tensor = tensor.requires_grad_(True)
@@ -223,9 +225,8 @@ class Network(Generic[Sx,Sy], ABC):
                 return Z.squeeze(0)
             else:
                 raise ValueError(f"Incorrect input-shape: {tuple(tensor.shape)}, expected: {self.input_shape}")
-        
-        input = Lazy(lambda: array).map(self._to_tensor)
-
+             
+        input = Lazy[Array](lambda: X).map(self._to_tensor)
         return self.FeedForward(
             input=input,
             output=input.map(forward)

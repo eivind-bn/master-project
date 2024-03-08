@@ -11,7 +11,7 @@ X = TypeVar("X", covariant=True)
 Y = TypeVar("Y")
 Z = TypeVar("Z")
 
-class Stream(Iterable[X], Generic[X]):
+class Stream(Iterable[X]):
 
     def __init__(self, source: Iterable[X]|Callable[[],X]) -> None:
         super().__init__()
@@ -164,21 +164,27 @@ class Stream(Iterable[X], Generic[X]):
     
     @overload
     def sort(self,
-             key:       Callable[[X],int|float] = ...,
+             key:       Callable[[X],int|float],
              ascending: bool = ...) -> "Stream[X]": ...
     
     def sort(self, 
              key:       Callable[[X],int|float]|None = None,
              ascending: bool = True) -> "Stream[X]":
         
-        if key is None:
-            key = lambda x: cast(int|float, x)
-        
-        def iterator() -> Iterator[X]:
-            for x in sorted(self, key=key, reverse=not ascending):
-                yield x
+        elements = self.list()
 
-        return Stream(iterator())
+        if elements:
+            if key is None:
+                if isinstance(elements[0], (int,float)):
+                    number_elements = cast(List[int|float], elements)
+                    number_stream = Stream(sorted(number_elements, reverse=not ascending))
+                    return cast(Stream[X], number_stream)
+                else:
+                    raise ValueError(f"Key must be provided if stream is not comprised of ints or floats.")
+            else:
+                return Stream(sorted(elements, key=key, reverse=not ascending))
+        else:
+            return Stream.empty()
     
     @overload
     def min(self:       "Stream[int]",
