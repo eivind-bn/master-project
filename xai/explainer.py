@@ -6,7 +6,7 @@ from numpy.typing import NDArray
 from numpy import float32, float64
 from tqdm import tqdm
 import math
-from .time import Seconds
+from .explanation import Explanation
 
 import shap # type: ignore
 import numpy as np
@@ -17,71 +17,11 @@ if TYPE_CHECKING:
 
 Array: TypeAlias = NDArray[Any]|Tensor
 Ints: TypeAlias = Tuple[int,...]
+Int: TypeAlias = Tuple[int]
 Sx = TypeVar("Sx", bound=Ints)
 Sy = TypeVar("Sy", bound=Ints)
-
-class Explanation(Generic[Sx,Sy]):
-
-    def __init__(self) -> None:
-        super().__init__()
-
-    @property
-    @abstractmethod
-    def input_shape(self) -> Sx:
-        pass
-
-    @property
-    @abstractmethod
-    def output_shape(self) -> Sy:
-        pass
-
-    @property
-    @abstractmethod
-    def values(self) -> NDArray[float64]:
-        pass
-
-    @property
-    @abstractmethod
-    def compute_time(self) -> Seconds:
-        pass
-
-    def _compute(self,
-                 input_shape:   Sx, 
-                 output_shape:  Sy,)
-
-    @staticmethod
-    def from_shap(input_shape:   Sx, 
-                  output_shape:  Sy, 
-                  explanation:   shap.Explanation) -> Explanation[Sx,Sy]:
-        class ShapExplanation(Explanation[Sx,Sy]):
-
-                @property
-                def input_shape(self) -> Sx:
-                    return input_shape
-
-                @property
-                def output_shape(self) -> Sy:
-                    return output_shape
-
-                @property
-                def values(self) -> NDArray[float64]:
-                    shap_values = explanation.values
-                    if isinstance(shap_values, np.ndarray) and shap_values.dtype == np.float64:
-                        return shap_values.reshape(input_shape + output_shape)
-                    else:
-                        raise TypeError(f"Instance returned from shap is of: {type(shap_values)}. Expected numpy array.")
-
-                @property
-                def compute_time(self) -> Seconds:
-                    return Seconds(explanation.compute_time)
-                
-        return ShapExplanation()
-
-        
-    def combine(self, other: Explanation[Sx,Ints]) -> Explanation[Sx,Sy]:
-        input_size = math.prod(self.input_shape)
-        output_size
-        values = np.zeros_like(self.values)
+Sa = TypeVar("Sa", bound=Ints)
+Sb = TypeVar("Sb", bound=Ints)
 
 
 class Explainer(Generic[Sx,Sy], ABC):
@@ -126,7 +66,11 @@ class PermutationExplainer(Explainer[Sx,Sy]):
         samples = self._to_numpy(samples)
         with tqdm(total=len(samples), disable=not verbose) as bar:
             for i in range(len(samples)):
-                explanations.append(Explanation(self.input_shape, self.output_shape, self._explainer(samples[i:i+1])))
+                explanations.append(Explanation(
+                    input_shape=self.input_shape, output_shape=
+                    self.output_shape, 
+                    explanation=self._explainer(samples[i:i+1]))
+                    )
                 bar.update()
 
         return tuple(explanations)
@@ -165,7 +109,11 @@ class ExactExplainer(Explainer[Sx,Sy]):
         samples = self._to_numpy(samples)
         with tqdm(total=len(samples), disable=not verbose) as bar:
             for i in range(len(samples)):
-                explanations.append(Explanation(self.input_shape, self.output_shape, self._explainer(samples[i:i+1])))
+                explanations.append(Explanation(
+                    input_shape=self.input_shape, 
+                    output_shape=self.output_shape, 
+                    explanation=self._explainer(samples[i:i+1])
+                    ))
                 bar.update()
 
         return tuple(explanations)
@@ -207,7 +155,11 @@ class KernelExplainer(Explainer[Sx,Sy]):
         samples = self._to_numpy(samples)
         with tqdm(total=len(samples), disable=not verbose) as bar:
             for i in range(len(samples)):
-                explanations.append(Explanation(self.input_shape, self.output_shape, self._explainer(samples[i:i+1])))
+                explanations.append(Explanation(
+                    input_shape=self.input_shape, 
+                    output_shape=self.output_shape, 
+                    explanation=self._explainer(samples[i:i+1])
+                    ))
                 bar.update()
 
         return tuple(explanations)
