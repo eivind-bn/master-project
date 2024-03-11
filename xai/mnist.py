@@ -20,6 +20,7 @@ from .explainer import Explainer, Explanation
 import mnist # type: ignore
 import numpy as np
 import torch
+import random
 
 Sx: TypeAlias = Tuple[Literal[28],Literal[28]]
 Sy: TypeAlias = Tuple[Literal[10]]
@@ -47,6 +48,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
                  hidden_layers:     int|Sequence[int] = 2,
                  hidden_activation: Activation|None = "ReLU",
                  device:            Device = "auto") -> None:
+        super().__init__()
 
         self._device = get_device(device)
         data = torch.from_numpy(mnist.train_images()).to(device=self.device, dtype=torch.float32)
@@ -61,6 +63,11 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
         self.train_labels = labels[indices[:train_portion]]
         self.val_labels = labels[indices[train_portion:]]
 
+        self._val_indices_by_digit: Dict[int,List[int]] = {}
+
+        for i,idx in enumerate(self.val_labels):
+            self._val_indices_by_digit.setdefault(idx.item(), []).append(i)
+
         self.autoencoder = AutoEncoder(
             data_shape=self.input_shape,
             latent_shape=latent_shape,
@@ -69,20 +76,18 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
             output_activation="Sigmoid",
             device=device
         )
-        self.autoencoder_optimizer = self.autoencoder.adam()
 
         self.classifier_head = Network.dense(
             input_dim=self.autoencoder.latent_shape,
             output_dim=self.output_shape,
             hidden_layers=hidden_layers,
             hidden_activation=hidden_activation,
-            output_activation="Softmax",
+            output_activation=lambda type: type.Softmax(dim=1),
             device=device
         )
-        self.classifier_head_optimizer = self.classifier_head.adam()
 
         self._reconstruction_explainers: Dict[Type[Explainer],Explainer] = {}
-        self._classifier_head_explainer: Dict[Type[Explainer],Explainer] = {}
+        self._classifier_head_explainers: Dict[Type[Explainer],Explainer] = {}
 
     @property
     def logits(self) -> Tuple[Callable[[Tensor],Tensor],...]:
@@ -100,6 +105,10 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
     def output_shape(self) -> Sy:
         return (10,)
     
+    def get_sample(self, digit: int) -> Tuple[Tensor,Tensor]:
+        idx = random.sample(self._val_indices_by_digit[digit], k=1)[0]
+        return self.val_data[idx], self.val_labels[idx]
+    
     def reconstruction_explainer(self, type: Type[Explainer]) -> Explainer:
         explainer = self._reconstruction_explainers.get(type)
         if explainer is None:
@@ -109,21 +118,39 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
         return explainer
     
     def classifier_head_explainer(self, type: Type[Explainer]) -> Explainer:
-        explainer = self._classifier_head_explainer.get(type)
+        explainer = self._classifier_head_explainers.get(type)
         if explainer is None:
             explainer = type(self.classifier_head, self(self.val_data).embedding())
-            self._classifier_head_explainer[type] = explainer
+            self._classifier_head_explainers[type] = explainer
 
         return explainer
+    
+    def fit(self, 
+            epochs: int,
+            batch_size: int,
+            loss_criterion: Loss = "MSELoss",
+            verbose: bool = False,
+            info: str | None = None) -> TrainStats:
+          self._reconstruction_explainers.clear()
+          return self.autoencoder.decoder.adam().fit(
+             X=self(self.train_data).embedding(),
+             Y=self.train_data,
+             epochs=epochs,
+             batch_size=batch_size,
+             loss_criterion=loss_criterion,
+             verbose=verbose,
+             info=info
+         )
     
     def fit_autoencoder(self, 
                         epochs: int,
                         batch_size: int,
-                        loss_criterion: Loss,
+                        loss_criterion: Loss = "MSELoss",
                         verbose: bool = False,
                         info: str | None = None) -> TrainStats:
           self._reconstruction_explainers.clear()
-          return self.autoencoder_optimizer.fit(
+          self._classifier_head_explainers.clear()
+          return self.autoencoder.adam().fit(
              X=self.train_data,
              Y=self.train_data,
              epochs=epochs,
@@ -133,21 +160,55 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
              info=info
          )
     
-    def fit_classifier(self, 
-                       epochs: int,
-                       batch_size: int,
-                       loss_criterion: Loss,
-                       verbose: bool = False,
-                       info: str | None = None) -> TrainStats:
-         return self.classifier_head_optimizer.fit(
+    def fit_decoder(self, 
+                    epochs: int,
+                    batch_size: int,
+                    loss_criterion: Loss = "MSELoss",
+                    verbose: bool = False,
+                    info: str | None = None) -> TrainStats:
+          self._reconstruction_explainers.clear()
+          return self.autoencoder.decoder.adam().fit(
              X=self(self.train_data).embedding(),
-             Y=torch.nn.functional.one_hot(self.train_labels, num_classes=10).float(),
+             Y=self.train_data,
              epochs=epochs,
              batch_size=batch_size,
              loss_criterion=loss_criterion,
              verbose=verbose,
              info=info
          )
+    
+    def fit_classifier_head(self, 
+                            epochs: int,
+                            batch_size: int,
+                            verbose: bool = False,
+                            info: str | None = None) -> TrainStats:
+         self._classifier_head_explainers.clear()
+         return self.classifier_head.adam().fit(
+             X=self(self.train_data).embedding(),
+             Y=self.train_labels,
+             epochs=epochs,
+             batch_size=batch_size,
+             loss_criterion=lambda type: type.NLLLoss(),
+             verbose=verbose,
+             info=info
+         )
+    
+    def fit_classifier(self,                            
+                       epochs: int,
+                       batch_size: int,
+                       verbose: bool = False,
+                       info: str | None = None) -> TrainStats:
+        self._reconstruction_explainers.clear()
+        self._classifier_head_explainers.clear()
+        return (self.autoencoder.encoder + self.classifier_head).adam().fit(
+            X=self.train_data,
+            Y=self.train_labels,
+            epochs=epochs,
+            batch_size=batch_size,
+            loss_criterion=lambda type: type.NLLLoss(),
+            verbose=verbose,
+            info=info
+        )
 
     def __call__(self, X: Array|Lazy[Array]) -> MNIST.FeedForward:
         autoencoder = self.autoencoder(X)

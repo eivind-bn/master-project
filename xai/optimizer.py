@@ -82,7 +82,7 @@ class Optimizer(ABC):
             else:
                 array = array.detach()
 
-            return array.to(device=self._network.device, dtype=torch.float32)
+            return array.to(device=self._network.device)
 
         X = prepare_tensor(X)
         Y = prepare_tensor(Y)
