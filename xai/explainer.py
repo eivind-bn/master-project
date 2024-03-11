@@ -22,17 +22,65 @@ Sy = TypeVar("Sy", bound=Ints)
 
 class Explanation(Generic[Sx,Sy]):
 
-    def __init__(self, 
-                 input_shape:   Sx, 
-                 output_shape:  Sy, 
-                 explanation:   shap.Explanation) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.input_shape = input_shape
-        self.output_shape = output_shape
-        self.compute_time = Seconds(explanation.compute_time)
-        self.values: NDArray[float64] = cast(NDArray[float64], explanation.values).reshape(self.input_shape + self.output_shape)
+
+    @property
+    @abstractmethod
+    def input_shape(self) -> Sx:
+        pass
+
+    @property
+    @abstractmethod
+    def output_shape(self) -> Sy:
+        pass
+
+    @property
+    @abstractmethod
+    def values(self) -> NDArray[float64]:
+        pass
+
+    @property
+    @abstractmethod
+    def compute_time(self) -> Seconds:
+        pass
+
+    def _compute(self,
+                 input_shape:   Sx, 
+                 output_shape:  Sy,)
+
+    @staticmethod
+    def from_shap(input_shape:   Sx, 
+                  output_shape:  Sy, 
+                  explanation:   shap.Explanation) -> Explanation[Sx,Sy]:
+        class ShapExplanation(Explanation[Sx,Sy]):
+
+                @property
+                def input_shape(self) -> Sx:
+                    return input_shape
+
+                @property
+                def output_shape(self) -> Sy:
+                    return output_shape
+
+                @property
+                def values(self) -> NDArray[float64]:
+                    shap_values = explanation.values
+                    if isinstance(shap_values, np.ndarray) and shap_values.dtype == np.float64:
+                        return shap_values.reshape(input_shape + output_shape)
+                    else:
+                        raise TypeError(f"Instance returned from shap is of: {type(shap_values)}. Expected numpy array.")
+
+                @property
+                def compute_time(self) -> Seconds:
+                    return Seconds(explanation.compute_time)
+                
+        return ShapExplanation()
+
         
-    def __mul__(self, other: Explanation[Sx,Ints]) -> Explanation[Sx,Sy]:
+    def combine(self, other: Explanation[Sx,Ints]) -> Explanation[Sx,Sy]:
+        input_size = math.prod(self.input_shape)
+        output_size
         values = np.zeros_like(self.values)
 
 
