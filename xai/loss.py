@@ -13,7 +13,7 @@ LossName: TypeAlias = Literal[
     "MSELoss",
     "CrossEntropyLoss",
     #"CTCLoss",
-    #"NLLLoss",
+    "NLLLoss",
     "PoissonNLLLoss",
     #"GaussianNLLLoss",
     "KLDivLoss",
@@ -52,7 +52,7 @@ class LossModule(torch.nn.Module):
     MSELoss = LossType(torch.nn.MSELoss)
     CrossEntropyLoss = LossType(torch.nn.CrossEntropyLoss)
     #CTCLoss = LossType(torch.nn.CTCLoss)
-    #NLLLoss = LossType(torch.nn.NLLLoss)
+    NLLLoss = LossType(torch.nn.NLLLoss)
     PoissonNLLLoss = LossType(torch.nn.PoissonNLLLoss)
     #GaussianNLLLoss = LossType(torch.nn.GaussianNLLLoss)
     KLDivLoss = LossType(torch.nn.KLDivLoss)
@@ -118,10 +118,20 @@ class LossModule(torch.nn.Module):
 
 # Verify that each loss function accepts two arguments once instantiated.
 for name,module_type in LossModule.types():
+    test_data_tensor = torch.ones((5,), dtype=torch.float32, device="cpu")
     try:
-        test_tensor = torch.ones((5,), dtype=torch.float32, device="cpu")
+        test_target_tensor = torch.ones_like(test_data_tensor, dtype=torch.float32)
         with warnings.catch_warnings(action="ignore"):
             module = module_type() 
-            loss = module(test_tensor,test_tensor)
+            loss = module(test_data_tensor,test_target_tensor)
+            continue
     except Exception as e:
-        raise ValueError(f"Incompatible module: {name}")
+        pass
+    try:
+        test_target_tensor = torch.ones_like(test_data_tensor, dtype=torch.long)
+        with warnings.catch_warnings(action="ignore"):
+            module = module_type() 
+            loss = module(test_data_tensor,torch.ones_like(test_data_tensor, dtype=torch.long))
+            continue
+    except Exception as e:
+        raise ValueError(f"Incompatible module: {name}, desc: {e}")

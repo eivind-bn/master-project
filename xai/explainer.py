@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import *
 from abc import ABC, abstractmethod
 from torch import Tensor
@@ -8,6 +9,8 @@ import math
 from .time import Seconds
 
 import shap # type: ignore
+import numpy as np
+import torch
 
 if TYPE_CHECKING:
     from .network import Network
@@ -29,6 +32,9 @@ class Explanation(Generic[Sx,Sy]):
         self.compute_time = Seconds(explanation.compute_time)
         self.values: NDArray[float64] = cast(NDArray[float64], explanation.values).reshape(self.input_shape + self.output_shape)
         
+    def __mul__(self, other: Explanation[Sx,Ints]) -> Explanation[Sx,Sy]:
+        values = np.zeros_like(self.values)
+
 
 class Explainer(Generic[Sx,Sy], ABC):
 
@@ -78,4 +84,121 @@ class PermutationExplainer(Explainer[Sx,Sy]):
         return tuple(explanations)
 
 
+class ExactExplainer(Explainer[Sx,Sy]):
 
+    def __init__(self, network: "Network[Sx,Sy]", background: Array) -> None:    
+        self.input_shape = network.input_shape
+        self.output_shape = network.output_shape
+        self._flattened_network = network.flatten()
+
+        input_size = math.prod(self.input_shape)
+        if input_size > 16:
+            raise ValueError(f"Network contain too many features: {input_size}")
+
+        def forward(sample: Array) -> NDArray[float32]:
+            numpy: NDArray[Any] = self._flattened_network(sample).output().numpy(force=True)
+            return numpy.astype(float32)
+
+        self._explainer = shap.ExactExplainer(
+            model=forward, 
+            masker=self._to_numpy(background)
+            )
+
+    def _to_numpy(self, array: Array) -> NDArray[float32]:
+        if isinstance(array, Tensor):
+            array = cast(NDArray[Any], array.numpy(force=True))
+        else:
+            array = array
+        
+        return array.astype(float32).reshape((-1,) + self.input_shape)
+
+    def explain(self, samples: Array, verbose: bool = False) -> Tuple[Explanation[Sx,Sy],...]:
+        explanations: List[Explanation[Sx,Sy]] = []
+        samples = self._to_numpy(samples)
+        with tqdm(total=len(samples), disable=not verbose) as bar:
+            for i in range(len(samples)):
+                explanations.append(Explanation(self.input_shape, self.output_shape, self._explainer(samples[i:i+1])))
+                bar.update()
+
+        return tuple(explanations)
+
+
+class KernelExplainer(Explainer[Sx,Sy]):
+
+    def __init__(self, network: "Network[Sx,Sy]", background: Array) -> None:    
+        from .network import Network
+        self.input_shape = network.input_shape
+        self.output_shape = network.output_shape
+        self.input_size = math.prod(self.input_shape)
+        self._flattened_network = Network.new(
+            device=network.device,
+            input_shape=(self.input_size,),
+        ).reshape(self.input_shape) + network.flatten()
+
+        
+
+        def forward(sample: Array) -> NDArray[float32]:
+            numpy: NDArray[Any] = self._flattened_network(sample).output().numpy(force=True)
+            return numpy.astype(float32)
+
+        self._explainer = shap.KernelExplainer(
+            model=forward, 
+            data=shap.kmeans(self._to_numpy(background), 100)
+            )
+
+    def _to_numpy(self, array: Array) -> NDArray[float32]:
+        if isinstance(array, Tensor):
+            array = cast(NDArray[Any], array.numpy(force=True))
+        else:
+            array = array
+        
+        return array.astype(float32).reshape((-1,self.input_size))
+
+    def explain(self, samples: Array, verbose: bool = False) -> Tuple[Explanation[Sx,Sy],...]:
+        explanations: List[Explanation[Sx,Sy]] = []
+        samples = self._to_numpy(samples)
+        with tqdm(total=len(samples), disable=not verbose) as bar:
+            for i in range(len(samples)):
+                explanations.append(Explanation(self.input_shape, self.output_shape, self._explainer(samples[i:i+1])))
+                bar.update()
+
+        return tuple(explanations)
+
+class DeepExplainer(Explainer[Sx,Sy]):
+
+    def __init__(self, network: "Network[Sx,Sy]", background: Array) -> None:    
+        from .network import Network
+        self.input_shape = network.input_shape
+        self.output_shape = network.output_shape
+        self.input_size = math.prod(self.input_shape)
+        self._network = network
+
+        def forward(sample: Array) -> NDArray[float32]:
+            numpy: NDArray[Any] = self._network(sample).output().numpy(force=True)
+            return numpy.astype(float32)
+
+        self._explainer = shap.DeepExplainer(
+            model=torch.nn.Sequential(*network.modules()), 
+            data=shap.sample(self._to_tensor(background), 100)
+            )
+
+    def _to_tensor(self, array: Array) -> torch.Tensor:
+        if isinstance(array, Tensor):
+            array = cast(NDArray[Any], array.numpy(force=True))
+        else:
+            array = array
+
+        array = array.astype(float32).reshape((-1,self.input_size))
+        
+        return torch.from_numpy(array).to(device=self._network.device, dtype=torch.float32)
+
+    def explain(self, samples: Array, verbose: bool = False) -> Tuple[Explanation[Sx,Sy],...]:
+        explanations: List[Explanation[Sx,Sy]] = []
+        samples = self._to_tensor(samples)
+        with tqdm(total=len(samples), disable=not verbose) as bar:
+            for i in range(len(samples)):
+                explanation = np.stack(self._explainer.shap_values(samples[i:i+1]))
+                explanations.append(explanation)
+                bar.update()
+
+        return tuple(explanations)

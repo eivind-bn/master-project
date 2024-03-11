@@ -19,7 +19,7 @@ mnist
 # %%
 mnist.fit_autoencoder(3000, 128, "MSELoss", verbose=True).plot_loss()
 # %%
-mnist.fit_classifier(3000, 128, "CrossEntropyLoss", verbose=True).plot_loss()
+mnist.fit_classifier_head(3000, 128, "CrossEntropyLoss", verbose=True).plot_loss()
 
 # %%
 
