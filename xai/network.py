@@ -12,6 +12,8 @@ from .activation import Activation, ActivationModule
 from .stream import Stream
 from .lazy import Lazy
 from .explainer import PermutationExplainer
+from .stats import TrainStats
+from .explainer import Explainer, Explainers
 import torch
 import dill # type: ignore
 import math
@@ -60,6 +62,10 @@ class Network(Generic[Sx,Sy], ABC):
 
     def __init__(self) -> None:
         self._items = 1
+        self.batch_sizes: List[int] = []
+        self.train_losses: List[float] = []
+        self.validation_losses: List[float] = []
+        self.accuracies: List[float] = []
         
         for dim in self.output_shape:
             if dim > 0:
@@ -86,6 +92,18 @@ class Network(Generic[Sx,Sy], ABC):
     @abstractmethod
     def output_shape(self) -> Sy:
         pass
+
+    def train_stats(self, info: str|None = None) -> TrainStats:
+        return TrainStats(
+            batch_size=tuple(self.batch_sizes),
+            train_losses=tuple(self.train_losses),
+            val_losses=tuple(self.validation_losses) if self.validation_losses else None,
+            accuracies=tuple(self.accuracies) if self.accuracies else None,
+            info=info
+        )
+    
+    def explainer(self, type: Explainers, background: Array) -> Explainer[Sx,Sy]:
+        return Explainer.get_type(type=type)(network=self, background=background)
     
     def sgd(self, **params: Unpack[SGD.Params]) -> SGD:
         return SGD(network=self, **params)

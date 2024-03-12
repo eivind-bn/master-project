@@ -44,6 +44,8 @@ class AutoEncoder(Generic[Sx,Sy], Network[Sx,Sx]):
             device=device
         )
 
+        super().__init__()
+
     @property
     def logits(self) -> Tuple[Callable[[Tensor],Tensor],...]:
         return (self.encoder + self.decoder).logits
