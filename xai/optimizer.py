@@ -65,32 +65,75 @@ class Optimizer(ABC):
         return self._optimizer
 
     def fit(self, 
-            X:              Tensor|ndarray, 
-            Y:              Tensor|ndarray, 
-            epochs:         int, 
-            batch_size:     int,
-            loss_criterion: Loss,
-            verbose:        bool = False,
-            info:           str|None = None) -> TrainStats:
+            X_train:            Tensor|ndarray, 
+            Y_train:            Tensor|ndarray, 
+            epochs:             int, 
+            batch_size:         int,
+            loss_criterion:     Loss,
+            X_val:              Tensor|ndarray|None = None,
+            Y_val:              Tensor|ndarray|None = None,
+            is_correct:         Callable[[Tensor,Tensor],Tensor]|None = None,
+            early_stop_count:   int|None = None,
+            verbose:            bool = False,
+            info:               str|None = None) -> TrainStats:
         
-        assert len(X) == len(Y), f"Length of X={len(X)} differs from length of Y={len(Y)}"
-        assert 0 < batch_size <= len(X), f"{batch_size=} is not between 0 and {len(X)}"
+        assert len(X_train) == len(Y_train), f"Length of X_train={len(X_train)} differs from length of Y_train={len(Y_train)}"
+        assert 0 < batch_size <= len(X_train), f"{batch_size=} is not between 0 and {len(X_train)}"
 
         def prepare_tensor(array: Tensor|ndarray) -> Tensor:
             if isinstance(array, ndarray):
-                array = torch.from_numpy(X)
+                array = torch.from_numpy(X_train)
             else:
                 array = array.detach()
 
             return array.to(device=self._network.device)
 
-        X = prepare_tensor(X)
-        Y = prepare_tensor(Y)
+        if X_val is not None and Y_val is not None:
+            assert len(X_val) == len(Y_val), f"Length of X_val={len(X_val)} differs from length of Y_val={len(Y_val)}"
+            assert 0 < batch_size <= len(X_val), f"{batch_size=} is not between 0 and {len(X_val)}"
+            X_val = prepare_tensor(X_val)
+            Y_val = prepare_tensor(Y_val)
+            val_exists = True
+        elif X_val is not None or Y_val is not None:
+            raise ValueError(f"Both X_val and Y_val must be provided or none of them.")
+        else:
+            X_val = None
+            Y_val = None
+            val_exists = False
+
+        best_validation_loss: float|None = None
+        worse_cnt: int = 0
+
+        if early_stop_count is not None:
+            if val_exists:
+                if early_stop_count < 0:
+                    raise ValueError(f"Early stop count must be positive")   
+            else:
+                raise ValueError(f"Cannot early stop without validation data.")
+
+            def early_stop(loss: float) -> bool:
+                nonlocal best_validation_loss
+                nonlocal worse_cnt
+                if best_validation_loss is not None:
+                    if loss < best_validation_loss:
+                        best_validation_loss = loss
+                        worse_cnt = 0
+                    else:
+                        worse_cnt += 1
+                else:
+                    best_validation_loss = loss
+
+                return worse_cnt >= early_stop_count
+        else:
+            def early_stop(loss: float) -> bool:
+                return False
+
+        X_train = prepare_tensor(X_train)
+        Y_train = prepare_tensor(Y_train)
 
         loss_function = LossModule.get(loss_criterion)
-        losses: List[float] = []
         
-        def mini_batch() -> Tuple[Tensor,Tensor]:
+        def mini_batch(X: Tensor, Y: Tensor) -> Tuple[Tensor,Tensor]:
             idx = torch.randperm(len(X))[:batch_size]
             return X[idx], Y[idx]
 
@@ -98,20 +141,38 @@ class Optimizer(ABC):
             for epoch in range(epochs):
                 optimizer = self.get_optimizer(epoch)
                 optimizer.zero_grad()
-                x,y = mini_batch()
-                y_hat = self._network(x).output()
-                loss: Tensor = loss_function(y_hat, y)
-                losses.append(float(loss.item()))
-                loss.backward()
+                x_train,y_train = mini_batch(X_train, Y_train)
+                y_hat_train = self._network(x_train).output()
+                train_loss: Tensor = loss_function(y_hat_train, y_train)
+                self._network.batch_sizes.append(batch_size)
+                self._network.train_losses.append(float(train_loss.item()))
+                train_loss.backward()
                 optimizer.step()
-                bar.set_description(f"Loss: {loss:.6f}")
+
+                if X_val is not None and Y_val is not None:
+                    x_val,y_val = mini_batch(X_val, Y_val)
+                    y_hat_val = self._network(x_val).output()
+                    val_loss = float(loss_function(y_hat_val, y_val).item())
+                    self._network.validation_losses.append(val_loss)
+
+                    if is_correct is not None:
+                        correct_classification = is_correct(y_hat_val, y_val).reshape((batch_size,1))
+                        if correct_classification.dtype != torch.bool:
+                            raise ValueError(f"Expected accuracy tensor to consist of bool dtype, but found: {correct_classification.dtype}")
+                        accuracy = float((correct_classification.count_nonzero() / correct_classification.nelement()).item())
+                        self._network.accuracies.append(accuracy)
+
+                    if early_stop(val_loss):
+                        bar.set_description(f"Early stopping! Train-loss: {train_loss:.6f}, Val-loss: {val_loss:.6f}")
+                        break
+                    else:
+                        bar.set_description(f"Train-loss: {train_loss:.6f}, Val-loss: {val_loss:.6f}")
+                else:
+                    bar.set_description(f"Loss: {train_loss:.6f}")
+
                 bar.update()
 
-        return TrainStats(
-            batch_size=batch_size,
-            losses=tuple(losses),
-            info=info
-        )
+        return self._network.train_stats(info)
 
 class SGD(Optimizer):
     class Params(TypedDict, total=False):

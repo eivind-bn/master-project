@@ -15,7 +15,7 @@ from .activation import Activation
 from .autoencoder import AutoEncoder
 from .optimizer import SGD, Adam, RMSprop
 from .loss import Loss
-from .explainer import Explainer, Explanation
+from .explainer import Explainer, Explanation, Explainers
 
 import mnist # type: ignore
 import numpy as np
@@ -36,12 +36,30 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
         
         def digits(self) -> Tuple[int,...]:
             return tuple(self.classification().reshape((-1,10)).argmax(dim=1))
-        
-        def reconstruction_explanation(self, type: Type[Explainer], verbose: bool = False) -> Tuple[Explanation,...]:
-            return self._parent.reconstruction_explainer(type).explain(self.embedding(), verbose=verbose)
-        
-        def classification_explanation(self, type: Type[Explainer], verbose: bool = False) -> Tuple[Explanation,...]:
-            return self._parent.classifier_head_explainer(type).explain(self.embedding(), verbose=verbose)
+    
+        @overload
+        def explain(self, 
+                    domain: Literal["reconstruction"], 
+                    explainer: Explainers, 
+                    verbose: bool = ...) -> Explanation[Sl,Sx]: ...
+
+        @overload
+        def explain(self, 
+                    domain: Literal["classification"], 
+                    explainer: Explainers, 
+                    verbose: bool = ...) -> Explanation[Sl,Sy]: ...
+
+        def explain(self, 
+                    domain: Literal["classification", "reconstruction"], 
+                    explainer: Explainers, 
+                    verbose: bool = False) -> Explanation:
+            match domain:
+                case "classification":
+                    return self._parent.classifier_head_explainer(explainer).explain(self.embedding(), verbose)[0]
+                case "reconstruction":
+                    return self._parent.reconstruction_explainer(explainer).explain(self.embedding(), verbose)[0]
+                case _:
+                    assert_never(domain)
 
     def __init__(self, 
                  latent_shape:      Sl,
@@ -86,8 +104,8 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
             device=device
         )
 
-        self._reconstruction_explainers: Dict[Type[Explainer],Explainer] = {}
-        self._classifier_head_explainers: Dict[Type[Explainer],Explainer] = {}
+        self._reconstruction_explainers: Dict[Explainers,Explainer[Sl,Sx]] = {}
+        self._classifier_head_explainers: Dict[Explainers,Explainer[Sl,Sy]] = {}
 
     @property
     def logits(self) -> Tuple[Callable[[Tensor],Tensor],...]:
@@ -109,18 +127,18 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
         idx = random.sample(self._val_indices_by_digit[digit], k=1)[0]
         return self.val_data[idx], self.val_labels[idx]
     
-    def reconstruction_explainer(self, type: Type[Explainer]) -> Explainer:
+    def reconstruction_explainer(self, type: Explainers) -> Explainer[Sl,Sx]:
         explainer = self._reconstruction_explainers.get(type)
         if explainer is None:
-            explainer = type(self.autoencoder.decoder, self(self.val_data).embedding())
+            explainer = self.autoencoder.decoder.explainer(type, self(self.val_data).embedding())
             self._reconstruction_explainers[type] = explainer
 
         return explainer
     
-    def classifier_head_explainer(self, type: Type[Explainer]) -> Explainer:
+    def classifier_head_explainer(self, type: Explainers) -> Explainer[Sl,Sy]:
         explainer = self._classifier_head_explainers.get(type)
         if explainer is None:
-            explainer = type(self.classifier_head, self(self.val_data).embedding())
+            explainer = self.classifier_head.explainer(type, self(self.val_data).embedding())
             self._classifier_head_explainers[type] = explainer
 
         return explainer
@@ -129,30 +147,38 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
             epochs: int,
             batch_size: int,
             loss_criterion: Loss = "MSELoss",
+            early_stop_cont: int|None = 10,
             verbose: bool = False,
             info: str | None = None) -> TrainStats:
           self._reconstruction_explainers.clear()
           return self.autoencoder.decoder.adam().fit(
-             X=self(self.train_data).embedding(),
-             Y=self.train_data,
-             epochs=epochs,
-             batch_size=batch_size,
-             loss_criterion=loss_criterion,
-             verbose=verbose,
-             info=info
-         )
+              X_train=self(self.train_data).embedding(),
+              Y_train=self.train_data,
+              X_val=self(self.val_data).embedding(),
+              Y_val=self.val_data,
+              early_stop_count=early_stop_cont,
+              epochs=epochs,
+              batch_size=batch_size,
+              loss_criterion=loss_criterion,
+              verbose=verbose,
+              info=info
+              )
     
     def fit_autoencoder(self, 
                         epochs: int,
                         batch_size: int,
                         loss_criterion: Loss = "MSELoss",
+                        early_stop_cont: int|None = 10,
                         verbose: bool = False,
                         info: str | None = None) -> TrainStats:
           self._reconstruction_explainers.clear()
           self._classifier_head_explainers.clear()
           return self.autoencoder.adam().fit(
-             X=self.train_data,
-             Y=self.train_data,
+             X_train=self.train_data,
+             Y_train=self.train_data,
+             X_val=self.val_data,
+             Y_val=self.val_data,
+             early_stop_count=early_stop_cont,
              epochs=epochs,
              batch_size=batch_size,
              loss_criterion=loss_criterion,
@@ -164,12 +190,16 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
                     epochs: int,
                     batch_size: int,
                     loss_criterion: Loss = "MSELoss",
+                    early_stop_cont: int|None = 10,
                     verbose: bool = False,
                     info: str | None = None) -> TrainStats:
           self._reconstruction_explainers.clear()
           return self.autoencoder.decoder.adam().fit(
-             X=self(self.train_data).embedding(),
-             Y=self.train_data,
+             X_train=self(self.train_data).embedding(),
+             Y_train=self.train_data,
+             X_val=self(self.val_data).embedding(),
+             Y_val=self.val_data,
+             early_stop_count=early_stop_cont,
              epochs=epochs,
              batch_size=batch_size,
              loss_criterion=loss_criterion,
@@ -180,12 +210,16 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
     def fit_classifier_head(self, 
                             epochs: int,
                             batch_size: int,
+                            early_stop_cont: int|None = 10,
                             verbose: bool = False,
                             info: str | None = None) -> TrainStats:
          self._classifier_head_explainers.clear()
          return self.classifier_head.adam().fit(
-             X=self(self.train_data).embedding(),
-             Y=self.train_labels,
+             X_train=self(self.train_data).embedding(),
+             Y_train=self.train_labels,
+             X_val=self(self.val_data).embedding(),
+             Y_val=self.val_labels,
+             early_stop_count=early_stop_cont,
              epochs=epochs,
              batch_size=batch_size,
              loss_criterion=lambda type: type.NLLLoss(),
@@ -196,13 +230,17 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
     def fit_classifier(self,                            
                        epochs: int,
                        batch_size: int,
+                       early_stop_cont: int|None = 10,
                        verbose: bool = False,
                        info: str | None = None) -> TrainStats:
         self._reconstruction_explainers.clear()
         self._classifier_head_explainers.clear()
         return (self.autoencoder.encoder + self.classifier_head).adam().fit(
-            X=self.train_data,
-            Y=self.train_labels,
+            X_train=self.train_data,
+            Y_train=self.train_labels,
+            X_val=self.val_data,
+            Y_val=self.val_labels,
+            early_stop_count=early_stop_cont,
             epochs=epochs,
             batch_size=batch_size,
             loss_criterion=lambda type: type.NLLLoss(),
