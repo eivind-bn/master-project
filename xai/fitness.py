@@ -1,6 +1,6 @@
 from typing import *
 
-from .stream import Stream
+from . import *
 
 class Fitness:
 

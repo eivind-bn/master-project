@@ -1,6 +1,6 @@
 from typing import *
 from abc import ABC, abstractmethod
-from .bytes import Bytes
+from . import *
 
 import pickle
 import tempfile

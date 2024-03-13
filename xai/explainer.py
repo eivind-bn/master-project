@@ -1,5 +1,4 @@
 from __future__ import annotations
-from enum import Enum
 from typing import *
 from abc import ABC, abstractmethod
 from torch import Tensor
@@ -7,7 +6,8 @@ from numpy.typing import NDArray
 from numpy import float32, float64
 from tqdm import tqdm
 import math
-from .explanation import Explanation
+
+from . import *
 
 import shap # type: ignore
 import numpy as np
@@ -20,7 +20,7 @@ Array: TypeAlias = NDArray[Any]|Tensor
 Sx = TypeVar("Sx", bound=Tuple[int,...])
 Sy = TypeVar("Sy", bound=Tuple[int,...])
 
-Explainers = Literal[
+Explainers: TypeAlias = Literal[
     "permutation",
     "deep",
     "kernel"
@@ -33,6 +33,9 @@ class Explainer(Generic[Sx,Sy], ABC):
 
     @abstractmethod
     def explain(self, samples: Array, verbose: bool = False) -> Tuple[Explanation[Sx,Sy],...]:
+        pass
+
+    def inverse(self) -> Self[Sy,Sx]:
         pass
 
     @staticmethod
@@ -52,14 +55,14 @@ class PermutationExplainer(Explainer[Sx,Sy]):
     def __init__(self, network: "Network[Sx,Sy]", background: Array) -> None:    
         self.feature_shape = network.input_shape
         self.class_shape = network.output_shape
-        self._flattened_network = network.flatten()
+        self._network = network
 
         input_size = math.prod(self.feature_shape)
         if input_size > 128:
             raise ValueError(f"Network contain too many features: {input_size}")
 
         def forward(sample: Array) -> NDArray[float32]:
-            numpy: NDArray[Any] = self._flattened_network(sample).output().numpy(force=True)
+            numpy: NDArray[Any] = self._network(sample).output().numpy(force=True)
             return numpy.astype(float32)
 
         self._explainer = shap.PermutationExplainer(

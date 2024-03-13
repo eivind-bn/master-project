@@ -1,7 +1,7 @@
 
 from typing import *
 from enum import Enum
-from .angle import Radians
+from . import *
 
 AngleStateMeta: Any = type("AngleStateMeta", (type(Enum), type(Radians)), {})
 

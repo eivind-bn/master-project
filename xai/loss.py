@@ -1,7 +1,7 @@
 from typing import *
 from torch import Tensor
 from torch.nn import Module
-from .stream import Stream
+from . import *
 
 import torch
 import warnings

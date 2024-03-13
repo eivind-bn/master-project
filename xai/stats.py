@@ -20,7 +20,7 @@ class TrainStats:
         y_trends: List[str] = [train_loss_name]
         stats: Dict[str,Iterable[int|float]] = {
             epochs_name:       range(len(self.train_losses)),
-            train_loss_name:   self.train_losses
+            train_loss_name:   self.train_losses,
             }
         
         if self.val_losses is not None:
@@ -29,7 +29,7 @@ class TrainStats:
             stats[validation_loss] = self.val_losses
 
         if self.accuracies:
-            accuracies_name = "accuracies_name"
+            accuracies_name = "accuracies"
             y_trends.append(accuracies_name)
             stats[accuracies_name] = self.accuracies
 

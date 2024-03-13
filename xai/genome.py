@@ -2,18 +2,7 @@ from typing import *
 from dataclasses import dataclass
 from torch import Tensor
 from collections import deque
-from .agent import Agent
-from .observation import Observation
-from .action import Action
-from .policy import Policy
-from .action import Actions
-from .policy import Policy
-from .population import Population
-from .bytes import Memory
-from .reflist import Location
-from .stream import Stream
-from .asteroids import Asteroids
-from .genotype import GenoType
+from . import *
 
 import random
 import torch
