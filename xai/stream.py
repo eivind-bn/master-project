@@ -1,5 +1,5 @@
 from typing import *
-from .bytes import Memory
+from . import *
 
 import pickle
 import matplotlib.pyplot as plt

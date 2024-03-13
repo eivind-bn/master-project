@@ -1,8 +1,7 @@
 from typing import *
 from numpy.typing import NDArray
 from torch import Tensor
-from .angle import Angle
-from .policy import Device
+from . import *
 
 import matplotlib.image as im
 import matplotlib.pyplot as plt

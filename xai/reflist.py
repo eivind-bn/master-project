@@ -3,9 +3,7 @@ from collections import deque
 from typing import Iterator
 from tqdm import tqdm
 
-from .bytes import Memory, Bytes
-from .objref import ObjRef, Dump, Load, File
-from .stream import Stream
+from . import *
 
 import random
 

@@ -1,6 +1,6 @@
 from typing import *
 from dataclasses import dataclass
-from .stream import Stream
+from . import *
 
 import random
 

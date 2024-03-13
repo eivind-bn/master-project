@@ -1,21 +1,11 @@
 from __future__ import annotations
 from typing import *
 from dataclasses import dataclass
-from .network import Network, Array
-from .reflist import RefList
-from .bytes import GigaBytes
-from .stats import TrainStats
-from .feed_forward import FeedForward
-from .lazy import Lazy
 from torch import Tensor
 from numpy.typing import NDArray
 from numpy import float32, uint8
-from . import Device, get_device
-from .activation import Activation
-from .autoencoder import AutoEncoder
-from .optimizer import SGD, Adam, RMSprop
-from .loss import Loss
-from .explainer import Explainer, Explanation, Explainers
+
+from . import *
 
 import mnist # type: ignore
 import numpy as np
@@ -25,8 +15,14 @@ import random
 Sx: TypeAlias = Tuple[Literal[28],Literal[28]]
 Sy: TypeAlias = Tuple[Literal[10]]
 Sl = TypeVar("Sl", bound=Tuple[int,...])
+Domain = Literal[
+    "reconstruction", 
+    "embedding classification", 
+    "image classification", 
+    "reconstruction classification"
+    ]
 
-class MNIST(Generic[Sl], Network[Sx,Sy]):
+class MNIST(Generic[Sl]):
     @dataclass
     class FeedForward(Network.FeedForward):
         _parent:        MNIST
@@ -45,19 +41,26 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
 
         @overload
         def explain(self, 
-                    domain: Literal["classification"], 
+                    domain: Literal["embedding classification"], 
                     explainer: Explainers, 
                     verbose: bool = ...) -> Explanation[Sl,Sy]: ...
+        @overload
+        def explain(self, 
+                    domain: Literal["image classification", "reconstruction classification"], 
+                    explainer: Explainers, 
+                    verbose: bool = ...) -> Explanation[Sx,Sy]: ...
 
         def explain(self, 
-                    domain: Literal["classification", "reconstruction"], 
+                    domain: Domain, 
                     explainer: Explainers, 
                     verbose: bool = False) -> Explanation:
             match domain:
-                case "classification":
-                    return self._parent.classifier_head_explainer(explainer).explain(self.embedding(), verbose)[0]
                 case "reconstruction":
                     return self._parent.reconstruction_explainer(explainer).explain(self.embedding(), verbose)[0]
+                case "embedding classification":
+                    return self._parent.classifier_head_explainer(explainer).explain(self.embedding(), verbose)[0]
+                case "image classification":
+                    return self._parent.explainer(explainer).expl
                 case _:
                     assert_never(domain)
 
@@ -104,8 +107,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
             device=device
         )
 
-        self._reconstruction_explainers: Dict[Explainers,Explainer[Sl,Sx]] = {}
-        self._classifier_head_explainers: Dict[Explainers,Explainer[Sl,Sy]] = {}
+        self._explainers: Dict[Domain,Dict[Explainers,Explainer[Sx|Sl,Sx|Sy]]] = {}
 
     @property
     def logits(self) -> Tuple[Callable[[Tensor],Tensor],...]:
@@ -127,11 +129,45 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
         idx = random.sample(self._val_indices_by_digit[digit], k=1)[0]
         return self.val_data[idx], self.val_labels[idx]
     
+    @overload
+    def explainer(self, type: Explainers, domain: Literal["reconstruction"]) -> Explainer[Sl,Sx]: ...
+
+    @overload
+    def explainer(self, type: Explainers, domain: Literal["embedding classification"]) -> Explainer[Sl,Sy]: ...
+
+    @overload
+    def explainer(self, type: Explainers, domain: Literal["image classification", "reconstruction classification"]) -> Explainer[Sx,Sy]: ...
+
+    def explainer(self, type: Explainers, domain: Domain) -> Explainer:
+        explainer = self._explainers.setdefault(domain, {}).get(type)
+        if explainer is None:
+            match domain:
+                case "reconstruction":
+                    explainer = self.autoencoder.decoder.explainer(type, self(self.val_data).embedding())
+                case "embedding classification":
+                    explainer = self.classifier_head.explainer(type, self(self.val_data).embedding())
+                case "image classification":
+                    explainer = (self.autoencoder.encoder + self.classifier_head).explainer(type, self.val_data)
+                case "reconstruction classification":
+                    explainer = (self.autoencoder.encoder + self.classifier_head).explainer(type, self.val_data)
+                case _:
+                    assert_never(domain)
+        else:
+            return explainer
+    
     def reconstruction_explainer(self, type: Explainers) -> Explainer[Sl,Sx]:
-        explainer = self._reconstruction_explainers.get(type)
+        explainer = self._explainers.get(type)
         if explainer is None:
             explainer = self.autoencoder.decoder.explainer(type, self(self.val_data).embedding())
-            self._reconstruction_explainers[type] = explainer
+            self._explainers[type] = explainer
+
+        return explainer
+    
+    def classifier_head_explainer(self, type: Explainers) -> Explainer[Sl,Sy]:
+        explainer = self._classifier_head_explainers.get(type)
+        if explainer is None:
+            explainer = self.classifier_head.explainer(type, self(self.val_data).embedding())
+            self._classifier_head_explainers[type] = explainer
 
         return explainer
     
@@ -150,7 +186,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
             early_stop_cont: int|None = 10,
             verbose: bool = False,
             info: str | None = None) -> TrainStats:
-          self._reconstruction_explainers.clear()
+          self._explainers.clear()
           return self.autoencoder.decoder.adam().fit(
               X_train=self(self.train_data).embedding(),
               Y_train=self.train_data,
@@ -171,7 +207,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
                         early_stop_cont: int|None = 10,
                         verbose: bool = False,
                         info: str | None = None) -> TrainStats:
-          self._reconstruction_explainers.clear()
+          self._explainers.clear()
           self._classifier_head_explainers.clear()
           return self.autoencoder.adam().fit(
              X_train=self.train_data,
@@ -193,7 +229,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
                     early_stop_cont: int|None = 10,
                     verbose: bool = False,
                     info: str | None = None) -> TrainStats:
-          self._reconstruction_explainers.clear()
+          self._explainers.clear()
           return self.autoencoder.decoder.adam().fit(
              X_train=self(self.train_data).embedding(),
              Y_train=self.train_data,
@@ -220,6 +256,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
              X_val=self(self.val_data).embedding(),
              Y_val=self.val_labels,
              early_stop_count=early_stop_cont,
+             is_correct=lambda y_hat,y: y_hat.argmax(dim=1) == y,
              epochs=epochs,
              batch_size=batch_size,
              loss_criterion=lambda type: type.NLLLoss(),
@@ -233,7 +270,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
                        early_stop_cont: int|None = 10,
                        verbose: bool = False,
                        info: str | None = None) -> TrainStats:
-        self._reconstruction_explainers.clear()
+        self._explainers.clear()
         self._classifier_head_explainers.clear()
         return (self.autoencoder.encoder + self.classifier_head).adam().fit(
             X_train=self.train_data,

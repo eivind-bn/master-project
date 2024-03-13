@@ -2,8 +2,7 @@ from typing import *
 from numpy.typing import NDArray, DTypeLike
 from collections import deque
 
-from .stream import Stream
-from .bytes import Memory, Bytes
+from . import *
 
 import numpy as np
 import math
@@ -11,8 +10,8 @@ import pickle
 
 T = TypeVar("T")
 
-Shape = Tuple[int,...]
-DataType = Literal[
+Shape: TypeAlias = Tuple[int,...]
+DataType: TypeAlias = Literal[
     "uint8",
     "uint16",
     "uint32",

@@ -2,17 +2,7 @@ from typing import *
 from tqdm import tqdm
 from collections import deque
 
-from .agent import Agent
-from .stream import Stream
-from .fitness import Fitness
-from .reflist import RefList
-from .bytes import Memory
-from .asteroids import Asteroids
-from .objref import ObjRef
-from .observation import Observation
-from .bytes import GigaBytes
-from .policy import Policy
-from .action import Actions
+from . import *
 
 import random
 import multiprocessing as mp

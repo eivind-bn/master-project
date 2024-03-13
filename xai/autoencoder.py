@@ -3,10 +3,7 @@ from dataclasses import dataclass
 from torch import Tensor
 from numpy.typing import NDArray
 
-from .network import Network, Ints, Array
-from .activation import Activation
-from . import Device
-from .lazy import Lazy
+from . import *
 
 Sx = TypeVar("Sx", bound=Tuple[int,...])
 Sy = TypeVar("Sy", bound=Tuple[int,...]) 

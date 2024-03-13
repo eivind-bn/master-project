@@ -4,7 +4,8 @@ from torch import Tensor
 from numpy.typing import NDArray
 from numpy import float32, float64
 import math
-from .time import Seconds
+
+from . import *
 
 import shap # type: ignore
 import numpy as np

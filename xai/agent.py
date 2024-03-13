@@ -1,10 +1,7 @@
 from typing import *
-from abc import ABC, abstractmethod
-from .observation import Observation
-from .action import Action
-from .window import Window
-from .record import Recorder
-from .asteroids import Asteroids
+from abc import ABC
+
+from . import *
 
 import pickle
 import copy
