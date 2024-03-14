@@ -1,4 +1,4 @@
-from typing import *
+from . import *
 from dataclasses import dataclass
 from plotly.graph_objects import Figure # type: ignore
 

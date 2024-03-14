@@ -1,4 +1,4 @@
-from typing import *
+from . import *
 
 T = TypeVar("T")
 

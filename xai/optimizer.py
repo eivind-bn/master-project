@@ -1,13 +1,10 @@
-from typing import *
+from . import *
 from abc import ABC
 from typing import Any, Callable, Type
 from torch import Tensor
-from torch.nn import Parameter
 from numpy import ndarray
 from tqdm import tqdm
 from torch.optim import Optimizer as TorchOptimizer
-from . import *
-
 
 import torch
 
@@ -79,7 +76,7 @@ class Optimizer(ABC):
 
         def prepare_tensor(array: Tensor|ndarray) -> Tensor:
             if isinstance(array, ndarray):
-                array = torch.from_numpy(X_train)
+                array = torch.from_numpy(array)
             else:
                 array = array.detach()
 

@@ -1,21 +1,15 @@
-from __future__ import annotations
-from typing import *
+from . import *
 from dataclasses import dataclass
 from torch import Tensor
-from numpy.typing import NDArray
-from numpy import float32, uint8
-
-from . import *
 
 import mnist # type: ignore
-import numpy as np
 import torch
 import random
 
 Sx: TypeAlias = Tuple[Literal[28],Literal[28]]
 Sy: TypeAlias = Tuple[Literal[10]]
 Sl = TypeVar("Sl", bound=Tuple[int,...])
-Domain = Literal[
+Domain: TypeAlias = Literal[
     "reconstruction", 
     "embedding classification", 
     "image classification", 
@@ -25,7 +19,7 @@ Domain = Literal[
 class MNIST(Generic[Sl]):
     @dataclass
     class FeedForward(Network.FeedForward):
-        _parent:        MNIST
+        _parent:        "MNIST"
         embedding:      Lazy[Tensor]
         reconstruction: Lazy[Tensor]
         classification: Lazy[Tensor]
@@ -285,7 +279,7 @@ class MNIST(Generic[Sl]):
             info=info
         )
 
-    def __call__(self, X: Array|Lazy[Array]) -> MNIST.FeedForward:
+    def __call__(self, X: Array|Lazy[Array]) -> "MNIST.FeedForward":
         autoencoder = self.autoencoder(X)
         classification = self.classifier_head(autoencoder.embedding)
         return self.FeedForward(

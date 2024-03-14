@@ -1,17 +1,14 @@
-from __future__ import annotations
-from typing import *
+from . import *
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from numpy import ndarray
 from numpy.typing import NDArray
 from torch import Tensor
 from torch.nn import Parameter, Module, Sequential
+
 import torch
 import dill # type: ignore
 import math
-from numpy.typing import NDArray
-
-from . import *
 
 Array: TypeAlias = NDArray[Any]|Tensor
 Ints: TypeAlias = Tuple[int,...]
@@ -109,7 +106,7 @@ class Network(Generic[Sx,Sy], ABC):
         return RMSprop(network=self, **params)
             
     @staticmethod
-    def new(device: Device, input_shape: Sx) -> Network[Sx,Sx]:
+    def new(device: Device, input_shape: Sx) -> "Network[Sx,Sx]":
         class EmptyNetwork(Network[Sx,Sx]):
                 @property
                 def logits(_) -> Tuple[Callable[[Tensor],Tensor],...]:

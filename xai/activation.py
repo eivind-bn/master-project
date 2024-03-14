@@ -1,4 +1,4 @@
-from typing import *
+from . import *
 from torch import Tensor
 from torch.nn import Module
 
