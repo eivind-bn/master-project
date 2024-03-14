@@ -1,7 +1,6 @@
-from typing import *
+from . import *
 from numpy.typing import NDArray
 from torch import Tensor
-from . import *
 
 import matplotlib.image as im
 import matplotlib.pyplot as plt
@@ -11,7 +10,7 @@ import torch
 _PLAYER_COLOR = (240,128,128)
 _Y_START, _Y_END = 18, 195
 
-_CMAP = Literal[
+_CMAP: TypeAlias = Literal[
             "viridis", "plasma", "inferno", "magma", "cividis",
             "Greys", "Purples", "Blues", "Greens", "Oranges", 
             "Reds", "YlOrBr", "YlOrRd", "OrRd", "PuRd", "RdPu", 

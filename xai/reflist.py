@@ -1,16 +1,13 @@
-from typing import *
-from collections import deque
+from . import *
 from typing import Iterator
 from tqdm import tqdm
-
-from . import *
 
 import random
 
 T = TypeVar("T")
 
-EvictionPolicy = Literal["FIFO", "Random", "Reject", "Throw"]
-Location = Literal["RAM"]|Literal["TEMP"]|Tuple[Literal["FILE"], str]
+EvictionPolicy: TypeAlias = Literal["FIFO", "Random", "Reject", "Throw"]
+Location: TypeAlias = Literal["RAM"]|Literal["TEMP"]|Tuple[Literal["FILE"], str]
 
 class EntryRejection(Exception):
     pass

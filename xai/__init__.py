@@ -26,27 +26,27 @@ from .memory import (Memory,
 from .stream import Stream
 from .activation import ActivationName, ActivationSelector, Activation, ActivationType, ActivationModule
 from .loss import LossName, LossSelector, Loss, LossType, LossModule
+from .stats import TrainStats
+from .optimizer import Optimizer, SGD, Adam, RMSprop
+from .explanation import Explanation
+from .explainer import Explainer, Explainers, PermutationExplainer, ExactExplainer, KernelExplainer, DeepExplainer
 from .network import Network, Array
 from .autoencoder import AutoEncoder
 from .angle import Angle, Turns, Radians, Degrees
 from .angle_state import AngleStates
 from .observation import Observation
 from .reward import Reward
+from .events import MouseEventType, MouseEventFlag, MouseEvent, Events
+from .window import ResizeMode, RatioMode, StatusBarMode, WindowClosed, WindowInterface, Window
+from .record import InterpolationMode, Recorder
 from .asteroids import Asteroids
 from .box import Box
 from .buffer import Shape, DataType, ArrayBuffer
 from .dqn import DQNStep, DQN
-from .events import MouseEventType, MouseEventFlag, MouseEvent, Events
-from .explainer import Explainer, Explainers, PermutationExplainer, ExactExplainer, KernelExplainer, DeepExplainer
-from .explanation import Explanation
 from .fitness import Fitness
 from .mnist import MNIST
 from .objref import ObjRef, File, Dump, Load
-from .record import InterpolationMode, Recorder
 from .reflist import EvictionPolicy, Location, EntryRejection, RefList
 from .population import Population
 from .genome import Genome
 from .genotype import GenoType
-from .stats import TrainStats
-from .optimizer import Optimizer, SGD, Adam, RMSprop
-from .window import ResizeMode, RatioMode, StatusBarMode, WindowClosed, WindowInterface, Window

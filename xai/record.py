@@ -1,11 +1,11 @@
-from typing import *
+from . import *
 from numpy.typing import NDArray
 from skvideo.io import FFmpegWriter # type: ignore[import-untyped]
 
 import cv2
 import numpy as np
 
-InterpolationMode = Literal[
+InterpolationMode: TypeAlias = Literal[
     "nearest", 
     "nearest-exact", 
     "linear", 

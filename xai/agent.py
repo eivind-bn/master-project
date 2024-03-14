@@ -1,7 +1,5 @@
-from typing import *
-from abc import ABC
-
 from . import *
+from abc import ABC
 
 import pickle
 import copy

@@ -1,10 +1,9 @@
-from typing import *
+from . import *
 from ale_py import ALEInterface, LoggerMode
 from ale_py.roms import Asteroids as AsteroidsROM # type: ignore[attr-defined]
 from random import random
 from numpy import uint8
 from numpy.typing import NDArray
-from . import *
 
 ALEInterface.setLoggerMode(LoggerMode.Warning)
 
@@ -96,14 +95,16 @@ class Asteroids:
                     "q": lambda: window.break_window(),
                     }
                 try:
-                    while self.running():
+                    while True:
+                        if not self.running():
+                            observation, rewards = self.reset()
 
                         if translate:
                             observation = observation.translated()
                         if rotate:
                             observation = observation.rotated()
 
-                        image = observation.numpy()
+                        image = observation.numpy(normalize=False)
                         recorder(image)
                         observation, rewards = window(image).match(cases)
                 except WindowClosed:

@@ -1,4 +1,3 @@
-from typing import *
 from . import *
 
 import psutil

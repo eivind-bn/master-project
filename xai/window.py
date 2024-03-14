@@ -1,14 +1,13 @@
-from typing import *
+from . import *
 from numpy.typing import NDArray
 from numpy import uint8
-from . import *
 
 import numpy as np
 import cv2
 
-ResizeMode = Literal["normal", "autosize"]
-RatioMode = Literal["free_ratio", "keep_ratio"]
-StatusBarMode = Literal["normal", "expanded"]
+ResizeMode: TypeAlias = Literal["normal", "autosize"]
+RatioMode: TypeAlias = Literal["free_ratio", "keep_ratio"]
+StatusBarMode: TypeAlias = Literal["normal", "expanded"]
 
 class WindowClosed(Exception):
     pass

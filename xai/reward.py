@@ -1,4 +1,4 @@
-from typing import *
+from . import *
 
 from enum import Enum
 

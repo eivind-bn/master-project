@@ -1,9 +1,6 @@
-from typing import *
+from . import *
 from dataclasses import dataclass
 from torch import Tensor
-from numpy.typing import NDArray
-
-from . import *
 
 Sx = TypeVar("Sx", bound=Tuple[int,...])
 Sy = TypeVar("Sy", bound=Tuple[int,...]) 

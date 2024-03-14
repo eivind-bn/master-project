@@ -1,4 +1,4 @@
-from typing import *
+from . import *
 from abc import ABC, abstractmethod
 
 X = TypeVar("X", bound="Unit[Any]")
