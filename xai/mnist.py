@@ -48,21 +48,16 @@ class MNIST(Generic[Sl]):
                     domain: Domain, 
                     explainer: Explainers, 
                     verbose: bool = False) -> Explanation:
-            match domain:
-                case "reconstruction":
-                    return self._parent.reconstruction_explainer(explainer).explain(self.embedding(), verbose)[0]
-                case "embedding classification":
-                    return self._parent.classifier_head_explainer(explainer).explain(self.embedding(), verbose)[0]
-                case "image classification":
-                    return self._parent.explainer(explainer)
-                case _:
-                    assert_never(domain)
+            return self._parent.explainer(explainer, domain).explain(self.embedding(), verbose).tuple()[0]
 
     def __init__(self, 
-                 latent_shape:      Sl,
-                 hidden_layers:     int|Sequence[int] = 2,
-                 hidden_activation: Activation|None = "ReLU",
-                 device:            Device = "auto") -> None:
+                 latent_shape:                      Sl,
+                 hidden_layers:                     int|Sequence[int] = 2,
+                 autoencoder_hidden_activation:     Activation|None = "ReLU",
+                 autoencoder_output_activation:     Activation|None = "Sigmoid",
+                 classifier_head_hidden_Activation: Activation|None = "ReLU",
+                 classifier_head_output_activation: Activation|None = "Softmax",
+                 device:                            Device = "auto") -> None:
         super().__init__()
 
         self._device = get_device(device)
@@ -87,17 +82,20 @@ class MNIST(Generic[Sl]):
             data_shape=self.input_shape,
             latent_shape=latent_shape,
             hidden_layers=hidden_layers,
-            hidden_activation=hidden_activation,
-            output_activation="Sigmoid",
+            hidden_activation=autoencoder_hidden_activation,
+            output_activation=autoencoder_output_activation,
             device=device
         )
+
+        if classifier_head_output_activation == "Softmax":
+            classifier_head_output_activation = lambda type: type.Softmax(dim=1)
 
         self.classifier_head = Network.dense(
             input_dim=self.autoencoder.latent_shape,
             output_dim=self.output_shape,
             hidden_layers=hidden_layers,
-            hidden_activation=hidden_activation,
-            output_activation=lambda type: type.Softmax(dim=1),
+            hidden_activation=classifier_head_hidden_Activation,
+            output_activation=classifier_head_output_activation,
             device=device
         )
 
@@ -145,11 +143,13 @@ class MNIST(Generic[Sl]):
                 case "image classification":
                     explainer = (self.autoencoder.encoder + self.classifier_head).explainer(type, self.val_data)
                 case "reconstruction classification":
-                    explainer = (self.autoencoder.encoder + self.classifier_head).explainer(type, self.val_data)
+                    pass
                 case _:
                     assert_never(domain)
-        else:
-            return explainer
+                    
+            self._explainers[domain][type] = explainer
+        
+        return explainer
     
     def reconstruction_explainer(self, type: Explainers) -> Explainer[Sl,Sx]:
         explainer = self._explainers.get(type)

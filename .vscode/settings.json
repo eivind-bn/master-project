@@ -4,5 +4,8 @@
         "flatmap",
         "shap"
     ],
-    "mypy.dmypyExecutable": "/home/eivind/master-project/.venv/bin/dmypy"
+    "mypy.dmypyExecutable": "/home/eivind/master-project/.venv/bin/dmypy",
+    "python.linting.mypyArgs": [
+        "--cache-dir=.mypy_cache/.vscode"
+    ],
 }
