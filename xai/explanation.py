@@ -62,6 +62,7 @@ class Explanation(Generic[Sx,Sy]):
             self._shap_values = shap_values
             self._base_values = base_values
             self._compute_time = compute_time
+            self._explanation = None
 
         self._shap_values = self._shap_values.reshape(self.feature_shape + self.class_shape)
 
@@ -124,7 +125,8 @@ class Explanation(Generic[Sx,Sy]):
             feature_shape=self.feature_shape,
             class_shape=self.class_shape,
             compute_time=self.compute_time,
-            shap_values=np.abs(self.shap_values)
+            shap_values=np.abs(self.shap_values),
+            base_values=self.base_values
         )
     
     def feature_sum(self) -> "Explanation[Tuple[Literal[1]],Sy]":
@@ -134,7 +136,8 @@ class Explanation(Generic[Sx,Sy]):
             feature_shape=(1,),
             class_shape=self.class_shape,
             compute_time=self.compute_time,
-            shap_values=values
+            shap_values=values,
+            base_values=self.base_values
         )
     
     def class_sum(self) -> "Explanation[Sx,Tuple[Literal[1]]]":
@@ -146,7 +149,8 @@ class Explanation(Generic[Sx,Sy]):
             feature_shape=self.feature_shape,
             class_shape=(1,),
             compute_time=self.compute_time,
-            shap_values=values
+            shap_values=values,
+            base_values=self.base_values
         )
     
     def to_rgb(self: "Explanation[Sx,Tuple[int,int]]", norm: float|None = None) -> NDArray[float32]:
@@ -219,5 +223,6 @@ class Explanation(Generic[Sx,Sy]):
             feature_shape=self.feature_shape if feature_shape is None else feature_shape,
             class_shape=self.class_shape if class_shape is None else class_shape,
             compute_time=self.compute_time,
-            shap_values=self.shap_values if shap_values is None else shap_values
+            shap_values=self.shap_values if shap_values is None else shap_values,
+            base_values=self.base_values
         )

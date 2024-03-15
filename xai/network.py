@@ -12,6 +12,7 @@ import math
 
 Array: TypeAlias = NDArray[Any]|Tensor
 Ints: TypeAlias = Tuple[int,...]
+T = TypeVar("T", bound=Explainer)
 Sx = TypeVar("Sx", bound=Ints)
 Sy = TypeVar("Sy", bound=Ints)
 Sz = TypeVar("Sz", bound=Ints)
@@ -63,10 +64,19 @@ class Network(Generic[Sx,Sy], ABC):
                 self._items *= dim
             else:
                 raise ValueError(f"Shape axis must be positive, not {dim}")
+            
+    class Lambda(torch.nn.Module):
+
+        def __init__(self, f: Callable[[Tensor],Tensor]) -> None:
+            super().__init__()
+            self._f = f
+
+        def forward(self, x: Tensor) -> Tensor:
+            return self._f(x)
     
     @property
     @abstractmethod
-    def logits(self) -> Tuple[Callable[[Tensor],Tensor],...]:
+    def logits(self) -> Tuple[torch.nn.Module]:
         pass
             
     @property
@@ -94,7 +104,11 @@ class Network(Generic[Sx,Sy], ABC):
         )
     
     def explainer(self, type: Explainers, background: Array) -> Explainer[Sx,Sy]:
-        return Explainer.get_type(type=type)(network=self, background=background)
+        return Explainer.new(
+            type=type,
+            network=self,
+            background=background
+        )
     
     def sgd(self, **params: Unpack[SGD.Params]) -> SGD:
         return SGD(network=self, **params)
@@ -254,7 +268,7 @@ class Network(Generic[Sx,Sy], ABC):
         class SingleHeadedNetwork(Network[Sx,Sz]):
             @property
             def logits(_) -> Tuple[Callable[[Tensor],Tensor],...]:
-                return self.logits + logits
+                return self.logits + Stream(logits).map(self.Lambda).tuple()
                     
             @property
             def device(_) -> Device:
