@@ -54,7 +54,7 @@ class MNIST(Generic[Sl]):
                 case "embedding classification":
                     return self._parent.classifier_head_explainer(explainer).explain(self.embedding(), verbose)[0]
                 case "image classification":
-                    return self._parent.explainer(explainer).expl
+                    return self._parent.explainer(explainer)
                 case _:
                     assert_never(domain)
 
@@ -102,6 +102,8 @@ class MNIST(Generic[Sl]):
         )
 
         self._explainers: Dict[Domain,Dict[Explainers,Explainer[Sx|Sl,Sx|Sy]]] = {}
+        self._reconstruction_explainers: Dict[Explainers,Explainer[Sl,Sx]] = {}
+        self._classifier_head_explainers: Dict[Explainers,Explainer[Sl,Sy]] = {}
 
     @property
     def logits(self) -> Tuple[Callable[[Tensor],Tensor],...]:
@@ -153,7 +155,7 @@ class MNIST(Generic[Sl]):
         explainer = self._explainers.get(type)
         if explainer is None:
             explainer = self.autoencoder.decoder.explainer(type, self(self.val_data).embedding())
-            self._explainers[type] = explainer
+            self._reconstruction_explainers[type] = explainer
 
         return explainer
     

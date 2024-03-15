@@ -62,7 +62,7 @@ class PermutationExplainer(Explainer[Sx,Sy]):
 
         def forward(sample: "Array") -> NDArray[float32]:
             numpy: NDArray[Any] = self._network(sample).output().numpy(force=True)
-            return numpy.astype(float32)
+            return numpy.astype(np.float64)
 
         self._explainer = shap.PermutationExplainer(
             model=forward, 
