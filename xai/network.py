@@ -19,7 +19,8 @@ Sz = TypeVar("Sz", bound=Ints)
 
 class Network(Generic[Sx,Sy], ABC):
     @dataclass
-    class FeedForward:
+    class FeedForward(Generic[Sx,Sy]):
+        parent:     "Network[Sx,Sy]"
         input:      Lazy[Tensor]
         output:     Lazy[Tensor]
         
@@ -49,6 +50,12 @@ class Network(Generic[Sx,Sy], ABC):
         def gradients(self, to_scalars: Callable[[Tensor],Tensor]) -> Tensor:
             return self.derivative(to_scalars, order=1)
         
+        def explain(self, algorithm: Explainers, background: Array) -> Explanation[Sx,Sy]:
+            return self.parent.explainer(algorithm, background).explain(self.input()).tuple()[0]
+        
+        def __call__(self) -> Tensor:
+            return self.output()
+            
         def __repr__(self) -> str:
             return str(self.output())
 
@@ -64,19 +71,10 @@ class Network(Generic[Sx,Sy], ABC):
                 self._items *= dim
             else:
                 raise ValueError(f"Shape axis must be positive, not {dim}")
-            
-    class Lambda(torch.nn.Module):
-
-        def __init__(self, f: Callable[[Tensor],Tensor]) -> None:
-            super().__init__()
-            self._f = f
-
-        def forward(self, x: Tensor) -> Tensor:
-            return self._f(x)
     
     @property
     @abstractmethod
-    def logits(self) -> Tuple[torch.nn.Module]:
+    def modules(self) -> Tuple[Module,...]:
         pass
             
     @property
@@ -103,7 +101,7 @@ class Network(Generic[Sx,Sy], ABC):
             info=info
         )
     
-    def explainer(self, type: Explainers, background: Array) -> Explainer[Sx,Sy]:
+    def explainer(self, type: Explainers, background: Array) -> Explainer[Sy,Sx]:
         return Explainer.new(
             type=type,
             network=self,
@@ -123,7 +121,7 @@ class Network(Generic[Sx,Sy], ABC):
     def new(device: Device, input_shape: Sx) -> "Network[Sx,Sx]":
         class EmptyNetwork(Network[Sx,Sx]):
                 @property
-                def logits(_) -> Tuple[Callable[[Tensor],Tensor],...]:
+                def modules(_) -> Tuple[Module,...]:
                     return tuple()
                         
                 @property
@@ -193,7 +191,15 @@ class Network(Generic[Sx,Sy], ABC):
             
         shape = cast(Sz, tuple(new_shape))
 
-        network = self._appended(lambda tensor: tensor.reshape((-1,) + shape), shape)
+        class Reshape(torch.nn.Module):
+
+            def forward(self, tensor: Tensor) -> Tensor:
+                return tensor.reshape((-1,) + shape)
+            
+            def __repr__(self) -> str:
+                return f"{self.__class__.__name__}({shape})"
+
+        network = self._appended(Reshape(), shape)
         assert self._items == network._items, f"New rank: {network._items} differs from current rank: {self._items}"
         return network
     
@@ -203,9 +209,6 @@ class Network(Generic[Sx,Sy], ABC):
     def linear(self: "Network[Sx,Tuple[int]]", dim: int) -> "Network[Sx,Tuple[int]]":
         assert len(self.output_shape) == 1, f"Output dim must be flattened, but is: {self.output_shape}"
         return self._appended(torch.nn.Linear(self.output_shape[0], dim, device=self.device), (dim,))
-    
-    def permutation_explainer(self, background: Array) -> PermutationExplainer[Sx,Sy]:
-        return PermutationExplainer(network=self, background=background)
 
     def relu(self) -> "Network[Sx,Sy]":
         return self.activation("ReLU")
@@ -216,13 +219,8 @@ class Network(Generic[Sx,Sy], ABC):
     def activation(self, name: Activation) -> "Network[Sx,Sy]":
         return self._appended(ActivationModule.get(name), self.output_shape)
     
-    def modules(self) -> Iterator[Module]:
-        for layer in self.logits:
-            if isinstance(layer, Module):
-                yield layer
-    
     def parameters(self) -> Iterator[Parameter]:
-        for module in self.modules():
+        for module in self.modules:
             for param in module.parameters():
                 yield param
 
@@ -232,43 +230,66 @@ class Network(Generic[Sx,Sy], ABC):
 
         return array.to(dtype=torch.float32, device=self.device)
         
-    def __call__(self, X: Array|Lazy[Array]) -> FeedForward:
+    def __call__(self, X: Array|Lazy[Array]|FeedForward) -> FeedForward:
 
         def forward(tensor: Tensor) -> Tensor:
             tensor = tensor.requires_grad_(True)
             if tensor.shape[1:] == self.input_shape:
                 Z = tensor
-                for layer in self.logits:
+                for layer in self.modules:
                     Z = layer(Z)
                 return Z
             elif tensor.shape == self.input_shape:
                 Z = tensor.unsqueeze(0)
-                for layer in self.logits:
+                for layer in self.modules:
                     Z = layer(Z)
                 return Z.squeeze(0)
             else:
                 raise ValueError(f"Incorrect input-shape: {tuple(tensor.shape)}, expected: {self.input_shape}")
              
-        input = Lazy[Array](lambda: X).map(self._to_tensor)
-        return self.FeedForward(
-            input=input,
-            output=input.map(forward)
-        )
+        if isinstance(X, self.FeedForward):
+            return self.FeedForward(
+                parent=self,
+                input=X.output,
+                output=X.output.map(forward)
+            )
+        else:
+            input = Lazy[Array](lambda: X).map(self._to_tensor)
+            return self.FeedForward(
+                parent=self,
+                input=input,
+                output=input.map(forward)
+            )
 
     def __add__(self, other: "Network[Sy,Sz]") -> "Network[Sx,Sz]":
         if self.output_shape != other.input_shape:
             raise ValueError(f"Incompatible operand shape: {self.output_shape} != {other.input_shape}")
         
-        return self._extended(other.logits, other.output_shape)
+        return self._extended(other.modules, other.output_shape)
     
     def _extended(self, 
-                  logits:       Tuple[Callable[[Tensor],Tensor],...], 
+                  logits:       Iterable[Callable[[Tensor],Tensor]], 
                   new_shape:    Sz) -> "Network[Sx,Sz]":
+        
+        class Lambda(torch.nn.Module):
+
+            def __init__(self, f: Callable[[Tensor],Tensor]) -> None:
+                super().__init__()
+                self._f = f
+
+            def forward(self, x: Tensor) -> Tensor:
+                return self._f(x)
+            
+        def to_module(f: Callable[[Tensor],Tensor]) -> Module:
+            if isinstance(f, Module):
+                return f
+            else:
+                return Lambda(f)
         
         class SingleHeadedNetwork(Network[Sx,Sz]):
             @property
-            def logits(_) -> Tuple[Callable[[Tensor],Tensor],...]:
-                return self.logits + Stream(logits).map(self.Lambda).tuple()
+            def modules(_) -> Tuple[Module,...]:
+                return self.modules + Stream(logits).map(to_module).tuple()
                     
             @property
             def device(_) -> Device:
@@ -294,7 +315,7 @@ class Network(Generic[Sx,Sy], ABC):
             dill.dump(self, file)
 
     def __repr__(self) -> str:
-        return str(Sequential(*self.modules()))
+        return str(Sequential(*self.modules))
     
     @overload
     @classmethod
@@ -302,33 +323,33 @@ class Network(Generic[Sx,Sy], ABC):
              path: str, 
              *, 
              input_shape: Sx, 
-             output_shape: Sy) -> "Network[Sx,Sy]": ...
+             output_shape: Sy) -> Self: ...
 
     @overload
     @classmethod
     def load(cls, 
              path: str, 
              *, 
-             input_shape: Sx) -> "Network[Sx, Ints]": ...
+             input_shape: Sx) -> Self: ...
 
     @overload
     @classmethod
     def load(cls, 
              path: str, 
              *, 
-             output_shape: Sy) -> "Network[Ints, Sy]": ...
+             output_shape: Sy) -> Self: ...
 
     @overload
     @classmethod
     def load(cls, 
-             path: str) -> "Network[Ints, Ints]": ...
+             path: str) -> Self: ...
 
     @classmethod
     def load(cls, 
              path: str, 
              *, 
              input_shape: Sx|None = None, 
-             output_shape: Sy|None = None) -> "Network":
+             output_shape: Sy|None = None) -> Self:
         with open(path, "rb") as file:
             network: Network = dill.load(file)
 
@@ -339,6 +360,6 @@ class Network(Generic[Sx,Sy], ABC):
             if output_shape and output_shape != network.output_shape:
                 raise TypeError(f"Unpickled object has incorrect output-shape: {output_shape}, should be: {network.output_shape}")  
 
-            return cast(Network[Any,Any], network)
+            return cast(Self, network)
         else:
             raise TypeError(f"Unpickled object is of incorrect type: {type(network)}")

@@ -13,8 +13,8 @@ import torch
 if TYPE_CHECKING:
     from .network import Network, Array
 
-Sx = TypeVar("Sx", bound=Tuple[int,...])
-Sy = TypeVar("Sy", bound=Tuple[int,...])
+C = TypeVar("C", bound=Tuple[int,...])
+F = TypeVar("F", bound=Tuple[int,...])
 
 Explainers: TypeAlias = Literal[
     "exact",
@@ -23,16 +23,31 @@ Explainers: TypeAlias = Literal[
     "kernel"
 ]
 
-class Explainer(Generic[Sx,Sy], ABC):
+class Explainer(Generic[C,F], ABC):
 
     @abstractmethod
-    def __init__(self, network: "Network[Sx,Sy]", background: "Array", array_type: Type["Array"]) -> None:
-        self._feature_shape = network.input_shape
-        self._class_shape = network.output_shape
-        self._network = network
-        self._feature_size = math.prod(self._feature_shape)
+    def __init__(self, network: "Network[F,C]", background: "Array", array_type: Type["Array"]) -> None:
+        self._class_shape: C = network.output_shape
         self._class_size = math.prod(self._class_shape)
+        
+        self._feature_shape: F = network.input_shape
+        self._feature_size = math.prod(self._feature_shape)
+        
         self._array_type = array_type
+
+        from . import Network
+        
+        input = Network.new(
+            device=network.device,
+            input_shape=(self._feature_size,),
+        ).reshape(network.input_shape)
+
+        output = Network.new(
+            device=network.device,
+            input_shape=network.output_shape
+        ).reshape((self._class_size,))
+
+        self._flattened_network = input + network + output
         self._background = self._feature_rows(background)
 
     def _to_numpy(self, array: "Array") -> NDArray[float64]:
@@ -45,7 +60,7 @@ class Explainer(Generic[Sx,Sy], ABC):
         if isinstance(array, np.ndarray):
             array = cast(Tensor, torch.from_numpy(array))
 
-        return array.to(dtype=torch.float32, device=self._network.device)
+        return array.to(dtype=torch.float32, device=self._flattened_network.device)
     
     def _feature_rows(self, array: "Array") -> "Array":
         if issubclass(self._array_type, np.ndarray):
@@ -55,23 +70,17 @@ class Explainer(Generic[Sx,Sy], ABC):
         else:
             raise TypeError(f"Incompatible return type: {self._array_type}")
     
-    def _call_network_func(self, array: "Array") -> "Array":
-        array = self._to_tensor(array).reshape((-1,) + self._feature_shape)
-        output = self._network(array).output().reshape((-1,self._class_size))
-        if issubclass(self._array_type, np.ndarray):
-            return self._to_numpy(output)
-        elif issubclass(self._array_type, Tensor):
-            return output
-        else:
-            raise TypeError(f"Incompatible return type: {self._array_type}")
+    def _call_network_func(self, array: "Array") -> NDArray[float64]:
+        with torch.no_grad():
+            return cast(np.ndarray, self._flattened_network(array).output().numpy()).astype(float64)
     
     @abstractmethod
-    def _explain_single(self, sample: "Array") -> Explanation[Sx,Sy]:
+    def _explain_single(self, flat_sample: "Array") -> Explanation[C,F]:
         pass
 
-    def explain(self, samples: "Array", verbose: bool = False) -> Stream[Explanation[Sx,Sy]]:
+    def explain(self, samples: "Array", verbose: bool = False) -> Stream[Explanation[C,F]]:
         samples = self._feature_rows(samples)
-        def iterator() -> Iterator[Explanation[Sx,Sy]]:
+        def iterator() -> Iterator[Explanation[C,F]]:
             with tqdm(total=len(samples), disable=not verbose) as bar:
                 for i in range(len(samples)):
                     yield self._explain_single(samples[i:i+1])
@@ -80,7 +89,7 @@ class Explainer(Generic[Sx,Sy], ABC):
         return Stream(iterator())
 
     @staticmethod
-    def new(type: Explainers, network: "Network[Sx,Sy]", background: "Array") -> "Explainer[Sx,Sy]":
+    def new(type: Explainers, network: "Network[F,C]", background: "Array") -> "Explainer[C,F]":
         match type:
             case "exact":
                 return ExactExplainer(network, background)
@@ -93,9 +102,9 @@ class Explainer(Generic[Sx,Sy], ABC):
             case _:
                 assert_never(type)
 
-class ExactExplainer(Explainer[Sx,Sy]):
+class ExactExplainer(Explainer[C,F]):
 
-    def __init__(self, network: "Network[Sx,Sy]", background: "Array") -> None: 
+    def __init__(self, network: "Network[F,C]", background: "Array") -> None: 
         super().__init__(
             network=network, 
             background=background, 
@@ -110,17 +119,17 @@ class ExactExplainer(Explainer[Sx,Sy]):
         if self._feature_size > 16:
             raise ValueError(f"Network contain too many features: {self._feature_size}")
 
-    def _explain_single(self, sample: "Array") -> Explanation[Sx,Sy]:
-        explanation: shap.Explanation = self._explainer(sample)
+    def _explain_single(self, flat_sample: "Array") -> Explanation[C,F]:
+        explanation: shap.Explanation = self._explainer(flat_sample)
         return Explanation(
-            feature_shape=self._feature_shape,
             class_shape=self._class_shape,
+            feature_shape=self._feature_shape,
             explanation=explanation
         )
 
-class PermutationExplainer(Explainer[Sx,Sy]):
+class PermutationExplainer(Explainer[C,F]):
 
-    def __init__(self, network: "Network[Sx,Sy]", background: "Array") -> None:   
+    def __init__(self, network: "Network[F,C]", background: "Array") -> None:   
         super().__init__(
             network=network, 
             background=background, 
@@ -135,17 +144,17 @@ class PermutationExplainer(Explainer[Sx,Sy]):
         if self._feature_size > 128:
             raise ValueError(f"Network contain too many features: {self._feature_size}")
 
-    def _explain_single(self, sample: "Array") -> Explanation[Sx,Sy]:
-        explanation: shap.Explanation = self._explainer(sample)
+    def _explain_single(self, flat_sample: "Array") -> Explanation[C,F]:
+        explanation: shap.Explanation = self._explainer(flat_sample)
         return Explanation(
-            feature_shape=self._feature_shape,
             class_shape=self._class_shape,
+            feature_shape=self._feature_shape,
             explanation=explanation
         )
         
-class KernelExplainer(Explainer[Sx,Sy]):
+class KernelExplainer(Explainer[C,F]):
 
-    def __init__(self, network: "Network[Sx,Sy]", background: "Array") -> None:   
+    def __init__(self, network: "Network[F,C]", background: "Array") -> None:   
         super().__init__(
             network=network, 
             background=background, 
@@ -157,49 +166,37 @@ class KernelExplainer(Explainer[Sx,Sy]):
             data=shap.kmeans(self._background, 100)
             )
 
-    def _explain_single(self, sample: "Array") -> Explanation[Sx,Sy]:
-        explanation: shap.Explanation = self._explainer(sample)
+    def _explain_single(self, flat_sample: "Array") -> Explanation[C,F]:
+        explanation: shap.Explanation = self._explainer(flat_sample)
         return Explanation(
-            feature_shape=self._feature_shape,
             class_shape=self._class_shape,
+            feature_shape=self._feature_shape,
             explanation=explanation
         )
 
-class DeepExplainer(Explainer[Sx,Sy]):
+class DeepExplainer(Explainer[C,F]):
 
-    def __init__(self, network: "Network[Sx,Sy]", background: "Array") -> None:    
+    def __init__(self, network: "Network[F,C]", background: "Array") -> None:    
         super().__init__(
             network=network, 
             background=background, 
             array_type=Tensor
             )
-        from . import Network
-        
-        input = Network.new(
-            device=network.device,
-            input_shape=(self._feature_size,),
-        ).reshape(network.input_shape)
-
-        output = Network.new(
-            device=network.device,
-            input_shape=network.output_shape
-        ).reshape((self._class_size,))
-
-        flattened_network = input + network + output
 
         self._explainer = shap.DeepExplainer(
-            model=torch.nn.Sequential(*flattened_network.modules()), 
+            model=torch.nn.Sequential(*self._flattened_network.modules), 
             data=shap.sample(self._background)
             )
-        self._base_values = torch.mean(network(background).output(), dim=0).numpy(force=True)
+        self._base_values = torch.mean(self._flattened_network(self._background).output(), dim=0).numpy(force=True)
 
-    def _explain_single(self, sample: "Array") -> Explanation[Sx,Sy]:
+    def _explain_single(self, flat_sample: "Array") -> Explanation[C,F]:
         zero_time = Seconds.now()
-        explanation = np.stack(self._explainer.shap_values(sample), dtype=np.float64)
+        explanation = np.stack(self._explainer.shap_values(flat_sample), dtype=np.float64)[:,0,:]
+        explanation = np.moveaxis(explanation,0,1).reshape(self._class_shape + self._feature_shape)
         end_time = Seconds.now() - zero_time
         return Explanation(
-            feature_shape=self._feature_shape,
             class_shape=self._class_shape,
+            feature_shape=self._feature_shape,
             compute_time=end_time,
             shap_values=explanation,
             base_values=self._base_values
