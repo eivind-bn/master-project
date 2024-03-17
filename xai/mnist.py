@@ -1,6 +1,7 @@
 from . import *
 from dataclasses import dataclass
 from torch import Tensor
+from torch.nn import Module
 
 import mnist # type: ignore
 import torch
@@ -16,39 +17,16 @@ Domain: TypeAlias = Literal[
     "reconstruction classification"
     ]
 
-class MNIST(Generic[Sl]):
+class MNIST(Generic[Sl], Network[Sx,Sy]):
     @dataclass
     class FeedForward(Network.FeedForward):
-        _parent:        "MNIST"
-        embedding:      Lazy[Tensor]
-        reconstruction: Lazy[Tensor]
-        classification: Lazy[Tensor]
+        parent:         "MNIST[Sl]"
+        embedding:      Network.FeedForward
+        reconstruction: Network.FeedForward
+        classification: Network.FeedForward
         
         def digits(self) -> Tuple[int,...]:
             return tuple(self.classification().reshape((-1,10)).argmax(dim=1))
-    
-        @overload
-        def explain(self, 
-                    domain: Literal["reconstruction"], 
-                    explainer: Explainers, 
-                    verbose: bool = ...) -> Explanation[Sl,Sx]: ...
-
-        @overload
-        def explain(self, 
-                    domain: Literal["embedding classification"], 
-                    explainer: Explainers, 
-                    verbose: bool = ...) -> Explanation[Sl,Sy]: ...
-        @overload
-        def explain(self, 
-                    domain: Literal["image classification", "reconstruction classification"], 
-                    explainer: Explainers, 
-                    verbose: bool = ...) -> Explanation[Sx,Sy]: ...
-
-        def explain(self, 
-                    domain: Domain, 
-                    explainer: Explainers, 
-                    verbose: bool = False) -> Explanation:
-            return self._parent.explainer(explainer, domain).explain(self.embedding(), verbose).tuple()[0]
 
     def __init__(self, 
                  latent_shape:                      Sl,
@@ -99,13 +77,9 @@ class MNIST(Generic[Sl]):
             device=device
         )
 
-        self._explainers: Dict[Domain,Dict[Explainers,Explainer[Sx|Sl,Sx|Sy]]] = {}
-        self._reconstruction_explainers: Dict[Explainers,Explainer[Sl,Sx]] = {}
-        self._classifier_head_explainers: Dict[Explainers,Explainer[Sl,Sy]] = {}
-
     @property
-    def logits(self) -> Tuple[Callable[[Tensor],Tensor],...]:
-        return (self.autoencoder.encoder + self.classifier_head).logits
+    def modules(self) -> Tuple[Module,...]:
+        return (self.autoencoder.encoder + self.classifier_head).modules
             
     @property
     def device(self) -> Device:
@@ -123,58 +97,6 @@ class MNIST(Generic[Sl]):
         idx = random.sample(self._val_indices_by_digit[digit], k=1)[0]
         return self.val_data[idx], self.val_labels[idx]
     
-    @overload
-    def explainer(self, type: Explainers, domain: Literal["reconstruction"]) -> Explainer[Sl,Sx]: ...
-
-    @overload
-    def explainer(self, type: Explainers, domain: Literal["embedding classification"]) -> Explainer[Sl,Sy]: ...
-
-    @overload
-    def explainer(self, type: Explainers, domain: Literal["image classification", "reconstruction classification"]) -> Explainer[Sx,Sy]: ...
-
-    def explainer(self, type: Explainers, domain: Domain) -> Explainer:
-        explainer = self._explainers.setdefault(domain, {}).get(type)
-        if explainer is None:
-            match domain:
-                case "reconstruction":
-                    explainer = self.autoencoder.decoder.explainer(type, self(self.val_data).embedding())
-                case "embedding classification":
-                    explainer = self.classifier_head.explainer(type, self(self.val_data).embedding())
-                case "image classification":
-                    explainer = (self.autoencoder.encoder + self.classifier_head).explainer(type, self.val_data)
-                case "reconstruction classification":
-                    pass
-                case _:
-                    assert_never(domain)
-                    
-            self._explainers[domain][type] = explainer
-        
-        return explainer
-    
-    def reconstruction_explainer(self, type: Explainers) -> Explainer[Sl,Sx]:
-        explainer = self._explainers.get(type)
-        if explainer is None:
-            explainer = self.autoencoder.decoder.explainer(type, self(self.val_data).embedding())
-            self._reconstruction_explainers[type] = explainer
-
-        return explainer
-    
-    def classifier_head_explainer(self, type: Explainers) -> Explainer[Sl,Sy]:
-        explainer = self._classifier_head_explainers.get(type)
-        if explainer is None:
-            explainer = self.classifier_head.explainer(type, self(self.val_data).embedding())
-            self._classifier_head_explainers[type] = explainer
-
-        return explainer
-    
-    def classifier_head_explainer(self, type: Explainers) -> Explainer[Sl,Sy]:
-        explainer = self._classifier_head_explainers.get(type)
-        if explainer is None:
-            explainer = self.classifier_head.explainer(type, self(self.val_data).embedding())
-            self._classifier_head_explainers[type] = explainer
-
-        return explainer
-    
     def fit(self, 
             epochs: int,
             batch_size: int,
@@ -182,7 +104,6 @@ class MNIST(Generic[Sl]):
             early_stop_cont: int|None = 10,
             verbose: bool = False,
             info: str | None = None) -> TrainStats:
-          self._explainers.clear()
           return self.autoencoder.decoder.adam().fit(
               X_train=self(self.train_data).embedding(),
               Y_train=self.train_data,
@@ -203,8 +124,6 @@ class MNIST(Generic[Sl]):
                         early_stop_cont: int|None = 10,
                         verbose: bool = False,
                         info: str | None = None) -> TrainStats:
-          self._explainers.clear()
-          self._classifier_head_explainers.clear()
           return self.autoencoder.adam().fit(
              X_train=self.train_data,
              Y_train=self.train_data,
@@ -225,7 +144,6 @@ class MNIST(Generic[Sl]):
                     early_stop_cont: int|None = 10,
                     verbose: bool = False,
                     info: str | None = None) -> TrainStats:
-          self._explainers.clear()
           return self.autoencoder.decoder.adam().fit(
              X_train=self(self.train_data).embedding(),
              Y_train=self.train_data,
@@ -245,7 +163,6 @@ class MNIST(Generic[Sl]):
                             early_stop_cont: int|None = 10,
                             verbose: bool = False,
                             info: str | None = None) -> TrainStats:
-         self._classifier_head_explainers.clear()
          return self.classifier_head.adam().fit(
              X_train=self(self.train_data).embedding(),
              Y_train=self.train_labels,
@@ -266,8 +183,6 @@ class MNIST(Generic[Sl]):
                        early_stop_cont: int|None = 10,
                        verbose: bool = False,
                        info: str | None = None) -> TrainStats:
-        self._explainers.clear()
-        self._classifier_head_explainers.clear()
         return (self.autoencoder.encoder + self.classifier_head).adam().fit(
             X_train=self.train_data,
             Y_train=self.train_labels,
@@ -281,16 +196,16 @@ class MNIST(Generic[Sl]):
             info=info
         )
 
-    def __call__(self, X: Array|Lazy[Array]) -> "MNIST.FeedForward":
-        autoencoder = self.autoencoder(X)
-        classification = self.classifier_head(autoencoder.embedding)
+    def __call__(self, X: Array|Lazy[Array]|"MNIST.FeedForward") -> "FeedForward":
+        autoencoding = self.autoencoder(X)
+        classification = self.classifier_head(autoencoding.embedding)
         return self.FeedForward(
-            _parent=self,
-            input=autoencoder.input,
+            parent=self,
+            input=autoencoding.input,
             output=classification.output,
-            embedding=autoencoder.embedding,
-            reconstruction=autoencoder.output,
-            classification=classification.output
+            embedding=autoencoding.embedding,
+            reconstruction=autoencoding.reconstruction,
+            classification=classification
         )
 
     
