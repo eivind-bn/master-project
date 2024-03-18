@@ -56,18 +56,11 @@ class DQN(Agent):
         else:
             self._device = torch.device(device)
 
-        self._autoencoder: torch.nn.Sequential = torch.load(autoencoder_path, map_location=self._device)
+        X: TypeAlias = Tuple[Literal[210], Literal[160], Literal[3]]
+        L: TypeAlias = Tuple[Literal[32]]
 
-        self._encoder = self._autoencoder[:7]
-        self._decoder = self._autoencoder[7:]
-
-        self._policy = torch.nn.Sequential(
-            torch.nn.Linear(in_features=4*32, out_features=2*32),
-            torch.nn.ReLU(),
-            torch.nn.Linear(in_features=2*32, out_features=32),
-            torch.nn.ReLU(),
-            torch.nn.Linear(in_features=32, out_features=len(self._actions))
-        ).to(device=self._device)
+        self._autoencoder: AutoEncoder[X,L] = AutoEncoder.load(autoencoder_path)
+        self._policy = Network.dense(input_dim=(4*32,), output_dim=(5,))
     
     def rollout(self, 
                 exploration_rate: float|Callable[[],float], 
@@ -91,7 +84,7 @@ class DQN(Agent):
                 if self._rotate:
                     observation = observation.rotated()
 
-                embedding: Tensor = self._encoder(observation.tensor(normalize=True, device=self._device).unsqueeze(0))
+                embedding: Tensor = self._autoencoder.encoder(observation.tensor(normalize=True, device=self._device).unsqueeze(0)).output()
                 embedding = embedding.squeeze(0)
 
                 return embedding
@@ -122,7 +115,7 @@ class DQN(Agent):
                             action_id = random.randrange(0, len(self._actions))
                             action = self._actions[action_id]
                         else:
-                            q_values: Tensor = self._policy(state)
+                            q_values: Tensor = self._policy(state).output()
                             action_id = int(q_values.argmax(1).item())
                             action = self._actions[action_id]
 
@@ -220,11 +213,11 @@ class DQN(Agent):
                         next_state = torch.from_numpy(batch["next_state"]).to(dtype=torch.float32, device=self._device)
                         done = torch.from_numpy(batch["done"]).to(dtype=torch.float32, device=self._device)
 
-                        Q: Tensor = online_network(state)
+                        Q: Tensor = online_network(state).output()
                         Q = Q.gather(dim=1, index=action)
 
                         with torch.no_grad():
-                            Q_next: Tensor = target_policy(next_state)
+                            Q_next: Tensor = target_policy(next_state).output()
                             Q_next, _ = Q_next.max(dim=1)
                             Q_next = Q_next.reshape((-1,1))
                             Q_target = reward + (1 - done) * gamma * Q_next

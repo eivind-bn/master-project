@@ -62,7 +62,9 @@ class Explanation(Generic[C,F]):
             self._base_values = base_values
             self._compute_time = compute_time
 
-        self._shap_values = self._shap_values.reshape(self.class_shape + self.feature_shape)
+        expected_shape = self._class_shape + self._feature_shape
+        if self._shap_values.shape != expected_shape:
+            raise ValueError(f"Shap values are of invalid shape: {self._shap_values.shape}, expected: {expected_shape}")
 
     @property
     def class_shape(self) -> C:
@@ -110,12 +112,13 @@ class Explanation(Generic[C,F]):
             feature_shape=(math.prod(self.feature_shape),)
         )
 
-    def combine(self, other: "Explanation[C,F2]") -> "Explanation[F,F2]":
+    def combine(self, other: "Explanation[C2,F]") -> "Explanation[C,C2]":
+        self._assert_shape(other, feature_shape=self.feature_shape)
         A = self.flatten()
         B = other.flatten()
-        return (A.invert() @ B).reshape(
-            class_shape=self.feature_shape,
-            feature_shape=other.feature_shape
+        return (A @ B.invert()).reshape(
+            class_shape=self.class_shape,
+            feature_shape=other.class_shape
         )
     
     def max(self) -> float:
@@ -171,18 +174,23 @@ class Explanation(Generic[C,F]):
         return rgb
     
     def __add__(self, other: "Explanation[C,F]") -> "Explanation[C,F]":
+        self._assert_shape(other, class_shape=self.class_shape, feature_shape=self.feature_shape)
         return self._compute(shap_values=self.shap_values + other.shap_values)
     
     def __sub__(self, other: "Explanation[C,F]") -> "Explanation[C,F]":
+        self._assert_shape(other, class_shape=self.class_shape, feature_shape=self.feature_shape)
         return self._compute(shap_values=self.shap_values - other.shap_values)
     
     def __mul__(self, other: "Explanation[C,F]") -> "Explanation[C,F]":
+        self._assert_shape(other, class_shape=self.class_shape, feature_shape=self.feature_shape)
         return self._compute(shap_values=self.shap_values * other.shap_values)
     
     def __truediv__(self, other: "Explanation[C,F]") -> "Explanation[C,F]":
+        self._assert_shape(other, class_shape=self.class_shape, feature_shape=self.feature_shape)
         return self._compute(shap_values=self.shap_values / other.shap_values)
 
     def __matmul__(self, other: "Explanation[F,C2]") -> "Explanation[C,C2]":
+        self._assert_shape(other, class_shape=self.feature_shape)
         return self._compute(
             feature_shape=other.feature_shape,
             shap_values=self.shap_values @ other.shap_values
@@ -190,6 +198,35 @@ class Explanation(Generic[C,F]):
     
     def __getitem__(self, indices: int|Sequence[int]|slice) -> NDArray[float64]:
         return self.shap_values[indices]
+    
+    @overload
+    @staticmethod
+    def _assert_shape(explanation:   "Explanation[C2,F2]",
+                      *,
+                      class_shape:   C2, 
+                      feature_shape: F2) -> None: ...
+            
+    @overload
+    @staticmethod
+    def _assert_shape(explanation:   "Explanation[C2,F2]",
+                      *,
+                      class_shape:   C2) -> None: ...
+    
+    @overload
+    @staticmethod
+    def _assert_shape(explanation:   "Explanation[C2,F2]",
+                      *,
+                      feature_shape: F2) -> None: ...
+    
+    @staticmethod
+    def _assert_shape(explanation:   "Explanation[C2,F2]",
+                      *,
+                      class_shape:   C2|None = None, 
+                      feature_shape: F2|None = None) -> None:
+        if class_shape is not None and class_shape != explanation.class_shape:
+            raise ValueError(f"Class shape of: {class_shape} differs from expected shape: {explanation.class_shape}")
+        if feature_shape is not None and feature_shape != explanation.feature_shape:
+            raise ValueError(f"Feature shape of: {feature_shape} differs from expected shape: {explanation.feature_shape}")
     
     @overload
     def _compute(self,
