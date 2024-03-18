@@ -20,7 +20,8 @@ Explainers: TypeAlias = Literal[
     "exact",
     "permutation",
     "deep",
-    "kernel"
+    "kernel",
+    "gradient"
 ]
 
 class Explainer(Generic[C,F], ABC):
@@ -72,7 +73,7 @@ class Explainer(Generic[C,F], ABC):
     
     def _call_network_func(self, array: "Array") -> NDArray[float64]:
         with torch.no_grad():
-            return cast(np.ndarray, self._flattened_network(array).output().numpy()).astype(float64)
+            return cast(np.ndarray, self._flattened_network(array).output().cpu().numpy()).astype(float64)
     
     @abstractmethod
     def _explain_single(self, flat_sample: "Array") -> Explanation[C,F]:
@@ -99,6 +100,8 @@ class Explainer(Generic[C,F], ABC):
                 return DeepExplainer(network, background)
             case "kernel":
                 return KernelExplainer(network, background)
+            case "gradient":
+                return GradientExplainer(network, background)
             case _:
                 assert_never(type)
 
@@ -139,16 +142,14 @@ class PermutationExplainer(Explainer[C,F]):
             array_type=np.ndarray
             )
 
+        self._max_evals = self._feature_size*2 + 1
         self._explainer = shap.PermutationExplainer(
             model=self._call_network_func, 
             masker=self._background
             )
-        
-        if self._feature_size > 128:
-            raise ValueError(f"Network contain too many features: {self._feature_size}")
 
     def _explain_single(self, flat_sample: "Array") -> Explanation[C,F]:
-        explanation: shap.Explanation = self._explainer(flat_sample)[0]
+        explanation: shap.Explanation = self._explainer(flat_sample, max_evals=self._max_evals)[0]
         shap_values = np.moveaxis(explanation.values,0,1).reshape(self._class_shape + self._feature_shape)
         return Explanation(
             class_shape=self._class_shape,
@@ -193,6 +194,33 @@ class DeepExplainer(Explainer[C,F]):
             )
 
         self._explainer = shap.DeepExplainer(
+            model=torch.nn.Sequential(*self._flattened_network.modules), 
+            data=shap.sample(self._background)
+            )
+        self._base_values = torch.mean(self._flattened_network(self._background).output(), dim=0).numpy(force=True)
+
+    def _explain_single(self, flat_sample: "Array") -> Explanation[C,F]:
+        zero_time = Seconds.now()
+        explanation = np.stack(self._explainer.shap_values(flat_sample), dtype=np.float64)[:,0,:]
+        end_time = Seconds.now() - zero_time
+        return Explanation(
+            class_shape=self._class_shape,
+            feature_shape=self._feature_shape,
+            compute_time=end_time,
+            base_values=self._base_values,
+            shap_values=explanation.reshape(self._class_shape + self._feature_shape),
+        )
+    
+class GradientExplainer(Explainer[C,F]):
+
+    def __init__(self, network: "Network[F,C]", background: "Array") -> None:    
+        super().__init__(
+            network=network, 
+            background=background, 
+            array_type=Tensor
+            )
+
+        self._explainer = shap.GradientExplainer(
             model=torch.nn.Sequential(*self._flattened_network.modules), 
             data=shap.sample(self._background)
             )

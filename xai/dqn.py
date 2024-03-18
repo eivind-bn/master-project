@@ -60,7 +60,7 @@ class DQN(Agent):
         L: TypeAlias = Tuple[Literal[32]]
 
         self._autoencoder: AutoEncoder[X,L] = AutoEncoder.load(autoencoder_path)
-        self._policy = Network.dense(input_dim=(4*32,), output_dim=(5,))
+        self._policy = Network.dense(input_dim=(4*32,), output_dim=(5,), device=device)
     
     def rollout(self, 
                 exploration_rate: float|Callable[[],float], 
