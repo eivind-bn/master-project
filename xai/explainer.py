@@ -120,11 +120,14 @@ class ExactExplainer(Explainer[C,F]):
             raise ValueError(f"Network contain too many features: {self._feature_size}")
 
     def _explain_single(self, flat_sample: "Array") -> Explanation[C,F]:
-        explanation: shap.Explanation = self._explainer(flat_sample)
+        explanation: shap.Explanation = self._explainer(flat_sample)[0]
+        shap_values = np.moveaxis(explanation.values,0,1).reshape(self._class_shape + self._feature_shape)
         return Explanation(
             class_shape=self._class_shape,
             feature_shape=self._feature_shape,
-            explanation=explanation
+            compute_time=Seconds(explanation.compute_time),
+            base_values=explanation.base_values,
+            shap_values=shap_values,
         )
 
 class PermutationExplainer(Explainer[C,F]):
@@ -145,11 +148,14 @@ class PermutationExplainer(Explainer[C,F]):
             raise ValueError(f"Network contain too many features: {self._feature_size}")
 
     def _explain_single(self, flat_sample: "Array") -> Explanation[C,F]:
-        explanation: shap.Explanation = self._explainer(flat_sample)
+        explanation: shap.Explanation = self._explainer(flat_sample)[0]
+        shap_values = np.moveaxis(explanation.values,0,1).reshape(self._class_shape + self._feature_shape)
         return Explanation(
             class_shape=self._class_shape,
             feature_shape=self._feature_shape,
-            explanation=explanation
+            compute_time=Seconds(explanation.compute_time),
+            base_values=explanation.base_values,
+            shap_values=shap_values,
         )
         
 class KernelExplainer(Explainer[C,F]):
@@ -167,11 +173,14 @@ class KernelExplainer(Explainer[C,F]):
             )
 
     def _explain_single(self, flat_sample: "Array") -> Explanation[C,F]:
-        explanation: shap.Explanation = self._explainer(flat_sample)
+        explanation: shap.Explanation = self._explainer(flat_sample)[0]
+        shap_values = np.moveaxis(explanation.values,0,1).reshape(self._class_shape + self._feature_shape)
         return Explanation(
             class_shape=self._class_shape,
             feature_shape=self._feature_shape,
-            explanation=explanation
+            compute_time=Seconds(explanation.compute_time),
+            base_values=explanation.base_values,
+            shap_values=shap_values,
         )
 
 class DeepExplainer(Explainer[C,F]):
@@ -192,12 +201,11 @@ class DeepExplainer(Explainer[C,F]):
     def _explain_single(self, flat_sample: "Array") -> Explanation[C,F]:
         zero_time = Seconds.now()
         explanation = np.stack(self._explainer.shap_values(flat_sample), dtype=np.float64)[:,0,:]
-        explanation = np.moveaxis(explanation,0,1).reshape(self._class_shape + self._feature_shape)
         end_time = Seconds.now() - zero_time
         return Explanation(
             class_shape=self._class_shape,
             feature_shape=self._feature_shape,
             compute_time=end_time,
-            shap_values=explanation,
-            base_values=self._base_values
+            base_values=self._base_values,
+            shap_values=explanation.reshape(self._class_shape + self._feature_shape),
         )

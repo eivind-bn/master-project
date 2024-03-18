@@ -1,7 +1,7 @@
 from . import *
 from abc import ABC
 
-import pickle
+import dill
 import copy
 
 class Agent(ABC):
@@ -12,7 +12,7 @@ class Agent(ABC):
 
     def save(self, path: str) -> None:
         with open(path, "wb") as file:
-            pickle.dump(self, file)
+            dill.dump(self, file)
 
     def clone(self) -> Self:
         return copy.deepcopy(self)
@@ -20,7 +20,7 @@ class Agent(ABC):
     @classmethod
     def load(cls, path: str) -> Self:
         with open(path, "rb") as file:
-            dqn: Self = pickle.load(file)
+            dqn: Self = dill.load(file)
 
         if isinstance(dqn, cls):
             return dqn
