@@ -165,3 +165,4 @@ checkpoints/
 dataset/
 *.pt
 *.npy
+mnist.model
