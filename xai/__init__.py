@@ -29,7 +29,7 @@ from .loss import LossName, LossSelector, Loss, LossType, LossModule
 from .stats import TrainStats
 from .optimizer import Optimizer, SGD, Adam, RMSprop
 from .explanation import Explanation
-from .explainer import Explainer, Explainers, PermutationExplainer, ExactExplainer, KernelExplainer, DeepExplainer
+from .explainer import Explainer, Explainers, PermutationExplainer, ExactExplainer, KernelExplainer, DeepExplainer, Links
 from .network import Network, Array
 from .autoencoder import AutoEncoder
 from .angle import Angle, Turns, Radians, Degrees
