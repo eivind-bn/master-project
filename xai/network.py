@@ -50,8 +50,8 @@ class Network(Generic[Sx,Sy], ABC):
         def gradients(self, to_scalars: Callable[[Tensor],Tensor]) -> Tensor:
             return self.derivative(to_scalars, order=1)
         
-        def explain(self, algorithm: Explainers, background: Array) -> Explanation[Sx,Sy]:
-            return self.parent.explainer(algorithm, background).explain(self.input()).tuple()[0]
+        def explain(self, algorithm: Explainers, background: Array, link: Links = "identity") -> Explanation[Sx,Sy]:
+            return self.parent.explainer(algorithm, background, link).explain(self.input()).tuple()[0]
         
         def __call__(self) -> Tensor:
             return self.output()
@@ -101,11 +101,12 @@ class Network(Generic[Sx,Sy], ABC):
             info=info
         )
     
-    def explainer(self, type: Explainers, background: Array) -> Explainer[Sy,Sx]:
+    def explainer(self, type: Explainers, background: Array, link: Links = "identity") -> Explainer[Sy,Sx]:
         return Explainer.new(
             type=type,
             network=self,
-            background=background
+            background=background,
+            link=link
         )
     
     def sgd(self, **params: Unpack[SGD.Params]) -> SGD:

@@ -11,7 +11,7 @@ from .buffer import ArrayBuffer as ArrayBuffer, DataType as DataType, Shape as S
 from .device import Device as Device, get_device as get_device
 from .dqn import DQN as DQN, DQNStep as DQNStep
 from .events import Events as Events, MouseEvent as MouseEvent, MouseEventFlag as MouseEventFlag, MouseEventType as MouseEventType
-from .explainer import DeepExplainer as DeepExplainer, ExactExplainer as ExactExplainer, Explainer as Explainer, Explainers as Explainers, KernelExplainer as KernelExplainer, PermutationExplainer as PermutationExplainer
+from .explainer import DeepExplainer as DeepExplainer, ExactExplainer as ExactExplainer, Explainer as Explainer, Explainers as Explainers, KernelExplainer as KernelExplainer, Links as Links, PermutationExplainer as PermutationExplainer
 from .explanation import Explanation as Explanation
 from .fitness import Fitness as Fitness
 from .genome import Genome as Genome
