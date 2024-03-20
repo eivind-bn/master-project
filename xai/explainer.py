@@ -2,7 +2,7 @@ from . import *
 from abc import ABC, abstractmethod
 from torch import Tensor
 from numpy.typing import NDArray
-from numpy import float32, float64
+from numpy import float64
 from tqdm import tqdm
 
 import math
