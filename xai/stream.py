@@ -1,7 +1,10 @@
 from . import *
 
 import pickle
-import matplotlib.pyplot as plt
+
+from multiprocessing import Pool
+from multiprocessing.pool import ThreadPool
+from tqdm import tqdm
 
 if TYPE_CHECKING:
     from .reflist import RefList, EvictionPolicy, Location
@@ -12,7 +15,9 @@ Z = TypeVar("Z")
 
 class Stream(Iterable[X]):
 
-    def __init__(self, source: Iterable[X]|Callable[[],X]) -> None:
+    def __init__(self, 
+                 source:        Iterable[X]|Callable[[],X], 
+                 expected_size: int|None = None) -> None:
         super().__init__()
         if isinstance(source, Iterable):
             self._source = source
@@ -23,8 +28,18 @@ class Stream(Iterable[X]):
 
             self._source = iterator()
 
+        if expected_size is None:
+            if isinstance(source, Sized):
+                self._expected_length: int|None = len(source)
+            elif isinstance(source, Stream):
+                self._expected_length = source._expected_length
+            else:
+                self._expected_length = None
+        else:
+            self._expected_length = expected_size
+
     def map(self, f: Callable[[X],Y]) -> "Stream[Y]":
-        return Stream(f(x) for x in self)
+        return Stream((f(x) for x in self), expected_size=self._expected_length)
     
     def zip(self, other: Iterable[Y]) -> "Stream[Tuple[X,Y]]":
         def iterator() -> Iterator[Tuple[X,Y]]:
@@ -49,7 +64,7 @@ class Stream(Iterable[X]):
             for i,x in enumerate(self):
                 yield i,x
 
-        return Stream(iterator())
+        return Stream(iterator(), expected_size=self._expected_length)
     
     def filter(self, predicate: Callable[[X],bool]) -> "Stream[X]":
         def iterator() -> Iterator[X]:
@@ -74,8 +89,13 @@ class Stream(Iterable[X]):
                 yield x
                 if i == stop:
                     break
+
+        if self._expected_length is None:
+            expected_length = None
+        else:
+            expected_length = min(self._expected_length, count)
         
-        return Stream(iterator())
+        return Stream(iterator(), expected_size=expected_length)
     
     def take_while(self, predicate: Callable[[X],bool]) -> "Stream[X]":
         def iterator() -> Iterator[X]:
@@ -99,7 +119,12 @@ class Stream(Iterable[X]):
             for x in iterator:
                 yield x
 
-        return Stream(iterator())
+        if self._expected_length is None:
+            expected_length = None
+        else:
+            expected_length = max(self._expected_length-count, 0)
+
+        return Stream(iterator(), expected_size=expected_length)
 
     def drop_while(self, predicate: Callable[[X],bool]) -> "Stream[X]":
         def iterator() -> Iterator[X]:
@@ -176,12 +201,12 @@ class Stream(Iterable[X]):
             if key is None:
                 if isinstance(elements[0], (int,float)):
                     number_elements = cast(List[int|float], elements)
-                    number_stream = Stream(sorted(number_elements, reverse=not ascending))
+                    number_stream = Stream(sorted(number_elements, reverse=not ascending), expected_size=len(number_elements))
                     return cast(Stream[X], number_stream)
                 else:
                     raise ValueError(f"Key must be provided if stream is not comprised of ints or floats.")
             else:
-                return Stream(sorted(elements, key=key, reverse=not ascending))
+                return Stream(sorted(elements, key=key, reverse=not ascending), expected_size=len(elements))
         else:
             return Stream.empty()
     
@@ -266,7 +291,12 @@ class Stream(Iterable[X]):
                 y = scanner(y,x)
                 yield y
 
-        return Stream(iterator())
+        if self._expected_length is None:
+            expected_length = self._expected_length
+        else:
+            expected_length = self._expected_length - 1
+
+        return Stream(iterator(), expected_size=expected_length)
     
     def peek(self, f: Callable[[X],None]) -> "Stream[X]":
         def iterator() -> Iterator[X]:
@@ -274,7 +304,7 @@ class Stream(Iterable[X]):
                 f(x)
                 yield x
 
-        return Stream(iterator())
+        return Stream(iterator(), expected_size=self._expected_length)
     
     def foreach(self, f: Callable[[X],None]) -> None:
         for x in self:
@@ -288,7 +318,17 @@ class Stream(Iterable[X]):
             for x in other:
                 yield x
 
-        return Stream(iterator())
+        if self._expected_length is not None:
+            if isinstance(other, Sized):
+                expected_length = self._expected_length + len(other)
+            elif isinstance(other, Stream) and other._expected_length:
+                expected_length = self._expected_length + other._expected_length
+            else:
+                expected_length = None
+        else:
+            expected_length = None
+
+        return Stream(iterator(), expected_size=expected_length)
     
     @overload
     def group_by(self:      "Stream[Tuple[Y,Z]]",
@@ -360,6 +400,49 @@ class Stream(Iterable[X]):
     
     def any(self, f: Callable[[X],bool]) -> bool:
         return any(f(x) for x in self)
+    
+    def fork(self,
+             type:          Literal["process","thread"],
+             f:             Callable[[X],Y],
+             max_forks:     int|None = None) -> "Stream[Y]":
+        if type == "process":
+            return self.fork_process(f, max_forks)
+        elif type == "thread":
+            return self.fork_thread(f, max_forks)
+        else:
+            assert_never(type)
+    
+    def fork_process(self, 
+                     f:             Callable[[X],Y], 
+                     max_processes: int|None = None) -> "Stream[Y]":
+        def iterator() -> Iterator[Y]:
+            with Pool(processes=max_processes) as pool:
+                for y in pool.imap(func=f, iterable=self):
+                    yield y
+
+        return Stream(iterator(), expected_size=self._expected_length)
+    
+    def fork_thread(self,
+                     f:             Callable[[X],Y],
+                     max_threads:   int|None = None) -> "Stream[Y]":
+        def iterator() -> Iterator[Y]:
+            with ThreadPool(processes=max_threads) as threads:
+                for y in threads.imap(f, self):
+                    yield y
+
+        return Stream(iterator(), expected_size=self._expected_length)
+
+    def monitor(self, 
+                description:        str|None = None,
+                expected_length:    int|None = None) -> "Stream[X]":
+        if expected_length is None:
+            expected_length = self._expected_length
+
+        def iterator() -> Iterator[X]:
+            for x in tqdm(iterable=self, desc=description, total=expected_length):
+                yield x
+
+        return Stream(iterator(), expected_size=expected_length)
     
     def item(self) -> X:
         iterator = iter(self)
@@ -506,4 +589,4 @@ class Stream(Iterable[X]):
     
     @staticmethod
     def empty() -> "Stream[Never]":
-        return Stream(tuple())
+        return Stream(tuple(), expected_size=0)
