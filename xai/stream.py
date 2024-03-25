@@ -361,6 +361,16 @@ class Stream(Iterable[X]):
     def any(self, f: Callable[[X],bool]) -> bool:
         return any(f(x) for x in self)
     
+    def item(self) -> X:
+        iterator = iter(self)
+        X = next(iterator)
+        try:
+            X2 = next(iterator)
+        except StopIteration:
+            return X
+        
+        raise ValueError(f"Stream must be singular, but contained more elements: {X=}, {X2=}")
+    
     def list(self) -> List[X]:
         return list(self)
     

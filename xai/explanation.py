@@ -62,9 +62,12 @@ class Explanation(Generic[C,F]):
             self._base_values = base_values
             self._compute_time = compute_time
 
-        expected_shape = self._class_shape + self._feature_shape
-        if self._shap_values.shape != expected_shape:
-            raise ValueError(f"Shap values are of invalid shape: {self._shap_values.shape}, expected: {expected_shape}")
+        shap_values_shape = self._class_shape + self._feature_shape
+        if self._shap_values.shape != shap_values_shape:
+            raise ValueError(f"Shap values are of invalid shape: {self._shap_values.shape}, expected: {shap_values_shape}")
+        
+        #if self._base_values.shape != self._class_shape:
+        #    raise ValueError(f"Base values are of invalid shape: {self._base_values.shape}, expected: {self._class_shape}")
 
     @property
     def class_shape(self) -> C:
@@ -93,17 +96,18 @@ class Explanation(Generic[C,F]):
         return self._compute(
             class_shape=self.feature_shape,
             feature_shape=self.class_shape,
-            shap_values=np.moveaxis(self.shap_values, old_feature_axes, new_feature_axes)
+            shap_values=np.moveaxis(self.shap_values, old_feature_axes, new_feature_axes),
+            base_values=self.base_values
         )
     
     def reshape(self, 
                 class_shape:    C2,
-                feature_shape:  F2 
-                ) -> "Explanation[C2,F2]":
+                feature_shape:  F2) -> "Explanation[C2,F2]":
         return self._compute(
             class_shape=class_shape,
             feature_shape=feature_shape,
-            shap_values=self.shap_values.reshape(class_shape + feature_shape)
+            shap_values=self.shap_values.reshape(class_shape + feature_shape),
+            base_values=self.base_values.reshape(class_shape)
         )
     
     def flatten(self) -> "Explanation[Int,Int]":
@@ -175,25 +179,37 @@ class Explanation(Generic[C,F]):
     
     def __add__(self, other: "Explanation[C,F]") -> "Explanation[C,F]":
         self._assert_shape(other, class_shape=self.class_shape, feature_shape=self.feature_shape)
-        return self._compute(shap_values=self.shap_values + other.shap_values)
+        return self._compute(
+            shap_values=self.shap_values + other.shap_values,
+            base_values=self.base_values + other.base_values
+            )
     
     def __sub__(self, other: "Explanation[C,F]") -> "Explanation[C,F]":
         self._assert_shape(other, class_shape=self.class_shape, feature_shape=self.feature_shape)
-        return self._compute(shap_values=self.shap_values - other.shap_values)
+        return self._compute(
+            shap_values=self.shap_values - other.shap_values,
+            base_values=self.base_values - other.base_values
+            )
     
     def __mul__(self, other: "Explanation[C,F]") -> "Explanation[C,F]":
         self._assert_shape(other, class_shape=self.class_shape, feature_shape=self.feature_shape)
-        return self._compute(shap_values=self.shap_values * other.shap_values)
+        return self._compute(
+            shap_values=self.shap_values * other.shap_values,
+            base_values=self.base_values * other.base_values
+            )
     
     def __truediv__(self, other: "Explanation[C,F]") -> "Explanation[C,F]":
         self._assert_shape(other, class_shape=self.class_shape, feature_shape=self.feature_shape)
-        return self._compute(shap_values=self.shap_values / other.shap_values)
+        return self._compute(
+            shap_values=self.shap_values / other.shap_values,
+            base_values=self.base_values / other.base_values
+            )
 
     def __matmul__(self, other: "Explanation[F,C2]") -> "Explanation[C,C2]":
         self._assert_shape(other, class_shape=self.feature_shape)
         return self._compute(
             feature_shape=other.feature_shape,
-            shap_values=self.shap_values @ other.shap_values
+            shap_values=self.shap_values @ other.shap_values,
         )
     
     def __getitem__(self, indices: int|Sequence[int]|slice) -> NDArray[float64]:
@@ -231,37 +247,42 @@ class Explanation(Generic[C,F]):
     @overload
     def _compute(self,
                  *,
-                 shap_values:   NDArray[float64] = ...) -> "Explanation[C,F]": ...
+                 shap_values:   NDArray[float64] = ...,
+                 base_values:   NDArray[float64] = ...) -> "Explanation[C,F]": ...
 
     @overload
     def _compute(self,
                  *,
                  feature_shape: F2, 
-                 shap_values:   NDArray[float64] = ...) -> "Explanation[C,F2]": ...
+                 shap_values:   NDArray[float64] = ...,
+                 base_values:   NDArray[float64] = ...) -> "Explanation[C,F2]": ...
     
     @overload
     def _compute(self,
                  *,
                  class_shape:   C2,
-                 shap_values:   NDArray[float64] = ...) -> "Explanation[C2,F]": ...
+                 shap_values:   NDArray[float64] = ...,
+                 base_values:   NDArray[float64] = ...) -> "Explanation[C2,F]": ...
 
     @overload  
     def _compute(self,
                  *,
                  class_shape:   C2,
                  feature_shape: F2, 
-                 shap_values:   NDArray[float64] = ...) -> "Explanation[C2,F2]": ...
+                 shap_values:   NDArray[float64] = ...,
+                 base_values:   NDArray[float64] = ...) -> "Explanation[C2,F2]": ...
     
     
     def _compute(self,
                  *,
                  class_shape:   C2|None = None,
                  feature_shape: F2|None = None, 
-                 shap_values:   NDArray[float64]|None = None) -> "Explanation":
+                 shap_values:   NDArray[float64]|None = None,
+                 base_values:   NDArray[float64]|None = None) -> "Explanation":
         return Explanation(
             class_shape=self.class_shape if class_shape is None else class_shape,
             feature_shape=self.feature_shape if feature_shape is None else feature_shape,
             compute_time=self.compute_time,
             shap_values=self.shap_values if shap_values is None else shap_values,
-            base_values=self.base_values
+            base_values=self.base_values if base_values is None else base_values
         )
