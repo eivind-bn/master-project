@@ -39,9 +39,13 @@ class Recorder:
         }
 
         self.interpolation_flag = interpolation_flags[interpolation]
-        
 
-    def __enter__(self) -> Callable[[NDArray[np.uint8]],None]:
+    def write(self, frames: Iterable[NDArray[np.uint8|np.float32]]) -> None:
+        with self as recorder:
+            for frame in frames:
+                recorder(frame)
+
+    def __enter__(self) -> Callable[[NDArray[np.uint8|np.float32]],None]:
         if self._filename is not None:
             writer = FFmpegWriter(
                 filename=self._filename,
@@ -50,14 +54,27 @@ class Recorder:
                 )
             dim: Tuple[int,int]|None = None
 
-            def render(image: NDArray[np.uint8]) -> None:
+            def render(image: NDArray[np.uint8|np.float32]) -> None:
                 nonlocal dim
                 if dim is None:
                     H,W,*_ = tuple(int(dim*self._scale) for dim in image.shape[:2])
                     dim = (H,W)
 
+                if image.dtype == np.float32:
+                    min,max = np.min(image), np.max(image)
+                    if 0 <= min <= 1.0 and 0 <= max <= 1.0:
+                        byte_image = (image*255).astype(np.uint8)
+                    else:
+                        difference = max - min
+                        if difference == 0:
+                            raise ValueError(f"Could not normalize the recording frame.")
+                        else:
+                            byte_image = (((image - min)/difference)*255).astype(np.uint8)
+                else:
+                    byte_image = image.astype(np.uint8)
+
                 rescale = cv2.resize(
-                    src=image, 
+                    src=byte_image, 
                     dsize=(dim[1], dim[0]),
                     interpolation=self.interpolation_flag)
 

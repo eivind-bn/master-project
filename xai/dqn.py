@@ -1,6 +1,7 @@
 from . import *
 from collections import deque
 from numpy.typing import NDArray
+from dataclasses import dataclass
 from torch import Tensor
 from tqdm import tqdm
 
@@ -9,36 +10,24 @@ import random
 import numpy as np
 import copy
 
-class DQNStep:
-    def __init__(self,    
-                 observation:   Observation,
-                 action:        Action,
-                 rewards:       Tuple[Reward,...],
-                 done:          bool,
-                 state:         Tensor,
-                 next_state:    Tensor,
-                 action_id:     int) -> None:
-        self.observation = observation
-        self.action = action
-        self.rewards = rewards
-        self.done = done
-        self.state = state
-        self.next_state = next_state
-        self.action_id = action_id
-
-    def reward_sum(self) -> int:
-        return sum(reward.value for reward in self.rewards)
-    
-    def numpy(self) -> Dict[str,NDArray]:
-        return {
-            "state": self.state.numpy(force=True),
-            "action": np.array([self.action_id]),
-            "reward": np.array([self.reward_sum()]),
-            "next_state": self.next_state.numpy(force=True),
-            "done": np.array([self.done])
-        }
-
 class DQN(Agent):
+    @dataclass
+    class Step(Agent.Step):
+        state:      Tensor
+        next_state: Tensor
+        action_id:  int
+
+        def reward_sum(self) -> int:
+            return sum(reward.value for reward in self.rewards)
+        
+        def numpy(self) -> Dict[str,NDArray]:
+            return {
+                "state": self.state.numpy(force=True),
+                "action": np.array([self.action_id]),
+                "reward": np.array([self.reward_sum()]),
+                "next_state": self.next_state.numpy(force=True),
+                "done": np.array([self.done])
+            }
 
     def __init__(self, autoencoder_path: str, device: Device, translate: bool, rotate: bool) -> None:
         super().__init__()
@@ -64,7 +53,7 @@ class DQN(Agent):
     
     def rollout(self, 
                 exploration_rate: float|Callable[[],float], 
-                frame_skips: int) -> Stream[DQNStep]:
+                frame_skips: int) -> Stream["DQN.Step"]:
 
         if isinstance(exploration_rate, float):
             def explore() -> bool:
@@ -73,10 +62,11 @@ class DQN(Agent):
             def explore() -> bool:
                 return random.random() < exploration_rate()
         
-        def iterator() -> Iterator[DQNStep]:
+        def iterator() -> Iterator[DQN.Step]:
             env = Asteroids()
             observation, rewards = env.reset()
             latents: Deque[Tensor] = deque(maxlen=4)
+            assert latents.maxlen is not None
             
             def encode(observation: Observation) -> Tensor:
                 if self._translate:
@@ -124,7 +114,7 @@ class DQN(Agent):
 
                     next_state = torch.stack(tuple(latents)).reshape((1,-1))
 
-                    yield DQNStep(
+                    yield DQN.Step(
                         observation=observation,
                         action=action,
                         rewards=rewards,

@@ -1,20 +1,23 @@
+from typing import Any
 from . import *
 from dataclasses import dataclass
 from torch import Tensor
 from torch.nn import Module
 
-Sx = TypeVar("Sx", bound=Tuple[int,...])
-Sy = TypeVar("Sy", bound=Tuple[int,...]) 
+Ints: TypeAlias = Tuple[int,...]
+X = TypeVar("X", bound=Tuple[int,...])
+L = TypeVar("L", bound=Tuple[int,...]) 
 
-class AutoEncoder(Generic[Sx,Sy], Network[Sx,Sx]):
-    @dataclass
-    class FeedForward(Network.FeedForward):
-        embedding:      Network.FeedForward
-        reconstruction: Network.FeedForward
+@dataclass
+class AutoEncoderFeedForward(Generic[X,L], FeedForward[X,X]):
+    embedding:      FeedForward[X,L]
+    reconstruction: FeedForward[L,X]
+
+class AutoEncoder(Generic[X,L], Network[X,X]):
 
     def __init__(self, 
-                 data_shape:        Sx, 
-                 latent_shape:      Sy,
+                 data_shape:        X, 
+                 latent_shape:      L,
                  hidden_layers:     int|Sequence[int] = 2,
                  hidden_activation: Activation|None = "ReLU",
                  output_activation: Activation|None = None,
@@ -50,17 +53,17 @@ class AutoEncoder(Generic[Sx,Sy], Network[Sx,Sx]):
         return self.encoder.device
    
     @property
-    def input_shape(self) -> Sx:
+    def input_shape(self) -> X:
         return self.encoder.input_shape
     
     @property
-    def output_shape(self) -> Sx:
+    def output_shape(self) -> X:
         return self.decoder.output_shape
 
-    def __call__(self, X: Array|Lazy[Array]|"AutoEncoder.FeedForward") -> FeedForward:
+    def __call__(self, X: Array|Lazy[Array]|AutoEncoderFeedForward[Ints,X]) -> AutoEncoderFeedForward[X,X]:
         embedding = self.encoder(X)
         reconstruction = self.decoder(embedding)
-        return self.FeedForward(
+        return AutoEncoderFeedForward(
             parent=self,
             input=embedding.input,
             embedding=embedding,

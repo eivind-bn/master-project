@@ -1,7 +1,7 @@
 from . import *
 from abc import ABC, abstractmethod
 
-import pickle
+import dill # type: ignore
 import tempfile
 import os
 
@@ -35,7 +35,7 @@ class ObjRef(ABC, Generic[T]):
 
     def save(self, path: str) -> None:
         with self as data, open(path, "w+b") as file:
-            pickle.dump(data, file)
+            dill.dump(data, file)
 
     @abstractmethod
     def __enter__(self) -> T:
@@ -64,7 +64,7 @@ class File(ObjRef[T]):
             prefix = f"{data.__class__.__name__.lower()}_"
 
         with tempfile.NamedTemporaryFile(mode="w+b", dir=directory, prefix=prefix, suffix=suffix, delete=False) as file:
-            pickle.dump(data, file)
+            dill.dump(data, file)
             self._size = Bytes(file.tell())
             self._name = file.name
 
@@ -77,7 +77,7 @@ class File(ObjRef[T]):
         if self._data is None:
             self._file = open(self._name, "r+b")
             self._file.seek(0)
-            self._data = cast(T, pickle.load(self._file))
+            self._data = cast(T, dill.load(self._file))
         
         return self._data
 
@@ -86,7 +86,7 @@ class File(ObjRef[T]):
         self._enters -= 1
         if self._enters < 1:    
             self._file.seek(0)
-            pickle.dump(self._data, self._file)
+            dill.dump(self._data, self._file)
             self._file.truncate()
             self._size = Bytes(self._file.tell())
             self._data = None
@@ -105,7 +105,7 @@ class Dump(ObjRef[T]):
         self._enters = 0
         self._data: T|None = None
         self._file = tempfile.TemporaryFile(mode="w+b")
-        pickle.dump(data, self._file)
+        dill.dump(data, self._file)
         self._size = Bytes(self._file.tell())
 
     def size(self) -> Bytes:
@@ -116,7 +116,7 @@ class Dump(ObjRef[T]):
         self._enters += 1
         if self._data is None:
             self._file.seek(0)
-            self._data = cast(T, pickle.load(self._file))
+            self._data = cast(T, dill.load(self._file))
 
         return self._data
 
@@ -125,7 +125,7 @@ class Dump(ObjRef[T]):
         self._enters -= 1
         if self._enters < 1:    
             self._file.seek(0)
-            pickle.dump(self._data, self._file)
+            dill.dump(self._data, self._file)
             self._file.truncate()
             self._size = Bytes(self._file.tell())
             self._data = None
@@ -139,11 +139,11 @@ class Load(ObjRef[T]):
         super().__init__()
         self._enters = 0
         self._data: T|None = None
-        self._obj_bytes = pickle.dumps(data)
+        self._obj_bytes = dill.dumps(data)
 
     def size(self) -> Bytes:
         if self._data is not None:
-            self._obj_bytes = pickle.dumps(self._data)
+            self._obj_bytes = dill.dumps(self._data)
 
         return Bytes(len(self._obj_bytes))
 
@@ -151,7 +151,7 @@ class Load(ObjRef[T]):
         assert self._enters >= 0
         self._enters += 1
         if self._data is None:
-            self._data = cast(T, pickle.loads(self._obj_bytes))
+            self._data = cast(T, dill.loads(self._obj_bytes))
 
         return self._data
 
@@ -159,5 +159,5 @@ class Load(ObjRef[T]):
         assert self._enters > 0
         self._enters = max(self._enters - 1, 0)
         if self._enters < 1 and self._data is not None:    
-            self._obj_bytes = pickle.dumps(self._data)
+            self._obj_bytes = dill.dumps(self._data)
             self._data = None

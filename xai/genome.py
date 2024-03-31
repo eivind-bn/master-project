@@ -7,116 +7,87 @@ import torch
 
 class Genome(Agent):
 
-    @overload
-    def __init__(self, 
-                 *,
-                 parents:   Sequence[Self],
-                 weights:   Sequence[int|float] = ...) -> None: ...
-
-    @overload
     def __init__(self,
-                 *,
-                 translate:         bool, 
-                 rotate:            bool,
-                 volatility:        float,
-                 mutation_rate:     float = ...,
-                 head_output_dim:   int = ...) -> None: ...
-
-    def __init__(self,
-                 *,
-                 parents:           Sequence[Self]|None = None,
-                 translate:         bool|None = None, 
-                 rotate:            bool|None = None,
-                 weights:           Sequence[int|float]|None = None,
-                 volatility:        float|None = None,
-                 mutation_rate:     float = 1.0,
-                 head_output_dim:   int = 64) -> None:
+                 translate: bool, 
+                 rotate:    bool,
+                 memory:    int = 4) -> None:
         super().__init__()
 
-        self.stats: Dict[str,Any] = {}
-        self._memory: Deque[Tensor] = deque(maxlen=4)
-        self._actions = (
-            Actions.NOOP,
-            Actions.UP,
-            Actions.LEFT,
-            Actions.RIGHT,
-            Actions.FIRE,
+        self._translate = translate
+        self._rotate = rotate
+
+        self._network = Network.dense(
+            input_dim=(memory,) + Asteroids.observation_shape,
+            hidden_layers=[512,256],
+            output_dim=(5,),
+            output_activation="Softmax"
         )
-
-        if parents is None:
-            assert translate is not None and rotate is not None and volatility is not None
-            self._translate = translate
-            self._rotate = rotate
-
-            self._mutation_rate = GenoType(
-                value=mutation_rate,
-                min_value=0.0,
-                max_value=1.0,
-                volatility=1.0,
-                min_volatility=0.0
-            )
-
-            self._volatility = GenoType(
-                value=volatility,
-                min_value=0.0,
-                volatility=1.0,
-                min_volatility=0.0
-            )
-
-            self._head = Policy.new(
-                input_dim=Asteroids.observation_shape,
-                output_dim=head_output_dim,
-                hidden_layers=0,
-                device="cpu"
-                )
-            self._tail = Policy.new(
-                input_dim=(4,) + self._head.output_dim,
-                output_dim=len(self._actions),
-                device="cpu"
-                )
-        else:
-            self._translate = parents[0]._translate
-            self._rotate = parents[0]._rotate
-
-            parent_heads = Stream(parents).map(lambda p: p._head).tuple()
-            parent_tails = Stream(parents).map(lambda p: p._tail).tuple()
-            parent_mutation_rates = Stream(parents).map(lambda p: p._mutation_rate).tuple()
-            parent_volatilities = Stream(parents).map(lambda p: p._volatility).tuple()
-            
-            if weights is None:
-                weights = Stream(random.random).take(len(parent_tails)).tuple()
-
-            self._head = Policy.crossover(parent_heads, weights)
-            self._tail = Policy.crossover(parent_tails, weights)
-            self._mutation_rate = GenoType.crossover(parent_mutation_rates, weights)
-            self._volatility = GenoType.crossover(parent_volatilities, weights)
-
-            self._mutation_rate.mutate(self._mutation_rate.value)
-            self._volatility.mutate(self._mutation_rate.value)
-            self._head.mutate(self._volatility.value, self._mutation_rate.value)
-            self._tail.mutate(self._volatility.value, self._mutation_rate.value) 
-
-    def transform_observation(self, observation: Observation) -> Tensor:
-        if self._translate:
-            observation = observation.translated()
-        if self._rotate:
-            observation = observation.rotated()
-
-        return observation.tensor(normalize=True, device="cpu")
     
-    def predict(self, observations: Sequence[Observation]) -> Sequence[Action]:
-        actions: List[Action] = []
-        for observation in observations:
-            tensor = self.transform_observation(observation)
-            self._memory.append(self._head.predict(tensor).tensor(True))
-            if len(self._memory) < 4:
-                continue
+    def rollout(self, env: Asteroids|None = None) -> Stream["Genome.Step"]:
+        def iterator() -> Iterator[Genome.Step]:
+            nonlocal env
+            if env is None:
+                env = Asteroids()
 
-            policy = self._tail.predict(torch.stack(tuple(self._memory))).tensor(True)
-            action = self._actions[int(policy.argmax().item())]
-            actions.append(action)
+            actions = (
+                Actions.NOOP,
+                Actions.UP,
+                Actions.LEFT,
+                Actions.RIGHT,
+                Actions.FIRE
+                )
+            observation, rewards = env.reset()
+            memory: Deque[Tensor] = deque(maxlen=self._network.input_shape[0])
 
-        return tuple(actions)
+            def memorize(observation: Observation) -> None:
+                if self._translate:
+                    observation = observation.translated()
+                if self._rotate:
+                    observation = observation.rotated()
+
+                tensor = observation.tensor(
+                    normalize=True,
+                    device=self._network.device
+                )
+
+                memory.append(tensor)
+
+            while len(memory) < memory.maxlen:
+                if env.running():
+                    action = random.choice(actions)
+                    last_observation = observation
+                    observation, rewards = env.step(action)
+                    yield Genome.Step(
+                        observation=last_observation,
+                        action=action,
+                        rewards=rewards,
+                        done=not env.running()
+                    )
+                else:
+                    observation, rewards = env.reset()
+
+                memorize(observation)
+
+            while True:
+                if env.running():
+                    state = torch.stack(tuple(memory))
+                    prediction = self._network(state)
+                    action_id = int(prediction().argmax().item())
+                    action = actions[action_id]
+                    last_observation = observation
+                    observation, rewards = env.step(action)
+                    yield Genome.Step(
+                        observation=last_observation,
+                        action=action,
+                        rewards=rewards,
+                        done=not env.running()
+                    )
+                else:
+                    observation, rewards = env.reset()
+
+                memorize(observation)
+
+        return Stream(iterator())
     
     def populate(self, 
                  population_size:           int,

@@ -17,59 +17,57 @@ Sx = TypeVar("Sx", bound=Ints)
 Sy = TypeVar("Sy", bound=Ints)
 Sz = TypeVar("Sz", bound=Ints)
 
+@dataclass
+class FeedForward(Generic[Sx,Sy]):
+    parent:     "Network[Sx,Sy]"
+    input:      Lazy[Tensor]
+    output:     Lazy[Tensor]
+    
+    def derivatives(self, to_scalars: Callable[[Tensor],Tensor], max_order: int|None = 1) -> Stream[Tensor]:  
+        def next_derivative() -> Iterator[Tensor]:
+            input = self.input()
+            derivative = self.output()
+            while True:
+                yield derivative.detach().requires_grad_(False)
+                wrt = to_scalars(derivative)
+                derivative = torch.autograd.grad(
+                    outputs=wrt,
+                    inputs=input,
+                    grad_outputs=torch.ones_like(wrt),
+                    create_graph=True,
+                    retain_graph=True
+                )[0]
+
+        if max_order is None:
+            return Stream(next_derivative())
+        else:
+            return Stream(next_derivative()).take(max_order+1)
+        
+    def derivative(self, to_scalars: Callable[[Tensor],Tensor], order: int = 1) -> Tensor:
+        return tuple(self.derivatives(to_scalars, order))[order]
+
+    def gradients(self, to_scalars: Callable[[Tensor],Tensor]) -> Tensor:
+        return self.derivative(to_scalars, order=1)
+    
+    def explain(self, 
+                algorithm:  Explainers, 
+                background: Array, 
+                max_evals:  int|None = None,
+                logistic:   bool = False) -> Explanation[Sx,Sy]:
+        explainer = self.parent.explainer(algorithm, background, logistic)
+        return explainer.explain(self.input(), max_evals=max_evals).tuple()[0]
+    
+    def __call__(self) -> Tensor:
+        return self.output()
+        
+    def __repr__(self) -> str:
+        return str(self.output())
+
 class Network(Generic[Sx,Sy], ABC):
-    @dataclass
-    class FeedForward(Generic[Sx,Sy]):
-        parent:     "Network[Sx,Sy]"
-        input:      Lazy[Tensor]
-        output:     Lazy[Tensor]
-        
-        def derivatives(self, to_scalars: Callable[[Tensor],Tensor], max_order: int|None = 1) -> Stream[Tensor]:  
-            def next_derivative() -> Iterator[Tensor]:
-                input = self.input()
-                derivative = self.output()
-                while True:
-                    yield derivative.detach().requires_grad_(False)
-                    wrt = to_scalars(derivative)
-                    derivative = torch.autograd.grad(
-                        outputs=wrt,
-                        inputs=input,
-                        grad_outputs=torch.ones_like(wrt),
-                        create_graph=True,
-                        retain_graph=True
-                    )[0]
-
-            if max_order is None:
-                return Stream(next_derivative())
-            else:
-                return Stream(next_derivative()).take(max_order+1)
-            
-        def derivative(self, to_scalars: Callable[[Tensor],Tensor], order: int = 1) -> Tensor:
-            return tuple(self.derivatives(to_scalars, order))[order]
-
-        def gradients(self, to_scalars: Callable[[Tensor],Tensor]) -> Tensor:
-            return self.derivative(to_scalars, order=1)
-        
-        def explain(self, 
-                    algorithm:  Explainers, 
-                    background: Array, 
-                    max_evals:  int|None = None,
-                    logistic:   bool = False) -> Explanation[Sx,Sy]:
-            explainer = self.parent.explainer(algorithm, background, logistic)
-            return explainer.explain(self.input(), max_evals=max_evals).tuple()[0]
-        
-        def __call__(self) -> Tensor:
-            return self.output()
-            
-        def __repr__(self) -> str:
-            return str(self.output())
 
     def __init__(self) -> None:
         self._items = 1
-        self.batch_sizes: List[int] = []
-        self.train_losses: List[float] = []
-        self.validation_losses: List[float] = []
-        self.accuracies: List[float] = []
+        self.train_history = TrainHistory()
         
         for dim in self.output_shape:
             if dim > 0:
@@ -96,15 +94,6 @@ class Network(Generic[Sx,Sy], ABC):
     @abstractmethod
     def output_shape(self) -> Sy:
         pass
-
-    def train_stats(self, info: str|None = None) -> TrainStats:
-        return TrainStats(
-            batch_size=tuple(self.batch_sizes),
-            train_losses=tuple(self.train_losses),
-            val_losses=tuple(self.validation_losses) if self.validation_losses else None,
-            accuracies=tuple(self.accuracies) if self.accuracies else None,
-            info=info
-        )
     
     def explainer(self, 
                   type:         Explainers, 
@@ -239,7 +228,7 @@ class Network(Generic[Sx,Sy], ABC):
 
         return array.to(dtype=torch.float32, device=self.device)
         
-    def __call__(self, X: Array|Lazy[Array]|FeedForward) -> FeedForward:
+    def __call__(self, X: Array|Lazy[Array]|FeedForward[Ints,Sx]) -> FeedForward[Sx,Sy]:
 
         def forward(tensor: Tensor) -> Tensor:
             tensor = tensor.requires_grad_(True)
@@ -256,15 +245,15 @@ class Network(Generic[Sx,Sy], ABC):
             else:
                 raise ValueError(f"Incorrect input-shape: {tuple(tensor.shape)}, expected: {self.input_shape}")
              
-        if isinstance(X, self.FeedForward):
-            return self.FeedForward(
+        if isinstance(X, FeedForward):
+            return FeedForward(
                 parent=self,
                 input=X.output,
                 output=X.output.map(forward)
             )
         else:
             input = Lazy[Array](lambda: X).map(self._to_tensor)
-            return self.FeedForward(
+            return FeedForward(
                 parent=self,
                 input=input,
                 output=input.map(forward)

@@ -1,7 +1,9 @@
 from . import *
 
-import pickle
+import dill # type: ignore
+import random
 
+from dataclasses import dataclass
 from multiprocessing import Pool
 from multiprocessing.pool import ThreadPool
 from tqdm import tqdm
@@ -12,6 +14,19 @@ if TYPE_CHECKING:
 X = TypeVar("X", covariant=True)
 Y = TypeVar("Y")
 Z = TypeVar("Z")
+
+@dataclass
+class _DillPickle(Generic[Y,Z]):
+    f: Callable[[Y],Z]
+
+    def __getstate__(self) -> bytes:
+        return cast(bytes, dill.dumps(self.f))
+    
+    def __setstate__(self, dump: bytes) -> None:
+        self.f = dill.loads(dump)
+    
+    def __call__(self, x: Y) -> Z:
+        return self.f(x)
 
 class Stream(Iterable[X]):
 
@@ -28,13 +43,13 @@ class Stream(Iterable[X]):
 
             self._source = iterator()
 
+        self._expected_length: int|None = None
+
         if expected_size is None:
             if isinstance(source, Sized):
-                self._expected_length: int|None = len(source)
+                self._expected_length = len(source)
             elif isinstance(source, Stream):
                 self._expected_length = source._expected_length
-            else:
-                self._expected_length = None
         else:
             self._expected_length = expected_size
 
@@ -159,6 +174,7 @@ class Stream(Iterable[X]):
                     cond,result = case(x)
                     if cond:
                         yield result()
+                        break
                             
         return Stream(iterator())
     
@@ -168,6 +184,12 @@ class Stream(Iterable[X]):
             y = reducer(y,x)
 
         return y
+    
+    def sum(self: "Stream[int|float]") -> float:
+        return self.reduce(0.0, lambda y,x: y+x)
+    
+    def prod(self: "Stream[int|float]") -> float:
+        return self.reduce(1.0, lambda y,x: y*x)
     
     def find(self, predicate: Callable[[X],bool], default: Y) -> X|Y:
         for x in self:
@@ -291,12 +313,7 @@ class Stream(Iterable[X]):
                 y = scanner(y,x)
                 yield y
 
-        if self._expected_length is None:
-            expected_length = self._expected_length
-        else:
-            expected_length = self._expected_length - 1
-
-        return Stream(iterator(), expected_size=expected_length)
+        return Stream(iterator(), expected_size=self._expected_length)
     
     def peek(self, f: Callable[[X],None]) -> "Stream[X]":
         def iterator() -> Iterator[X]:
@@ -321,7 +338,7 @@ class Stream(Iterable[X]):
         if self._expected_length is not None:
             if isinstance(other, Sized):
                 expected_length = self._expected_length + len(other)
-            elif isinstance(other, Stream) and other._expected_length:
+            elif isinstance(other, Stream) and other._expected_length is not None:
                 expected_length = self._expected_length + other._expected_length
             else:
                 expected_length = None
@@ -406,28 +423,29 @@ class Stream(Iterable[X]):
              f:             Callable[[X],Y],
              max_forks:     int|None = None) -> "Stream[Y]":
         if type == "process":
-            return self.fork_process(f, max_forks)
+            return self.fork_processes(f, max_forks)
         elif type == "thread":
-            return self.fork_thread(f, max_forks)
+            return self.fork_threads(f, max_forks)
         else:
             assert_never(type)
     
-    def fork_process(self, 
-                     f:             Callable[[X],Y], 
-                     max_processes: int|None = None) -> "Stream[Y]":
+    def fork_processes(self, 
+                       f:             Callable[[X],Y], 
+                       max_processes: int|None = None) -> "Stream[Y]":
+
         def iterator() -> Iterator[Y]:
             with Pool(processes=max_processes) as pool:
-                for y in pool.imap(func=f, iterable=self):
+                for y in pool.imap(func=_DillPickle(f), iterable=self):
                     yield y
 
         return Stream(iterator(), expected_size=self._expected_length)
     
-    def fork_thread(self,
+    def fork_threads(self,
                      f:             Callable[[X],Y],
                      max_threads:   int|None = None) -> "Stream[Y]":
         def iterator() -> Iterator[Y]:
             with ThreadPool(processes=max_threads) as threads:
-                for y in threads.imap(f, self):
+                for y in threads.imap(func=f, iterable=self):
                     yield y
 
         return Stream(iterator(), expected_size=self._expected_length)
@@ -442,7 +460,10 @@ class Stream(Iterable[X]):
             for x in tqdm(iterable=self, desc=description, total=expected_length):
                 yield x
 
-        return Stream(iterator(), expected_size=expected_length)
+        if self._expected_length is None:
+            return Stream(iterator(), expected_size=expected_length)
+        else:
+            return Stream(iterator(), expected_size=self._expected_length)
     
     def item(self) -> X:
         iterator = iter(self)
@@ -553,31 +574,94 @@ class Stream(Iterable[X]):
             verbose=verbose
         )
     
-    def save(self, obj_and_path: Callable[[X], Tuple[Y,str]]) -> None:
-        for x in self:
-            y,path = obj_and_path(x)
-            with open(path, "wb") as file:
-                pickle.dump(y, file)
-
-    def load(self, type_and_path: Callable[[X], Tuple[Type[Y],str]], raise_error: bool) -> "Stream[Y]":
-        def iterator() -> Iterator[Y]:
+    def save(self, path: str) -> None:
+        with open(path, "wb") as file:
             for x in self:
-                try:
-                    y_annotation, path = type_and_path(x)
-                    y_type: Type[Y] = y_annotation.mro()[0]
-                    with open(path, "rb") as file:
-                        y: Y = pickle.load(file)
-                        if isinstance(y, y_type):
-                            yield y
-                        else:
-                            raise TypeError(f"Unpickled object is not of type: {y_type}, but of type: {type(y)}")
-                except Exception as e:
-                    if raise_error:
-                        raise e
-                    
-        return Stream(iterator())
+                dill.dump(x, file)
 
-    def drain(self) -> None:
+    @staticmethod
+    def load(path:              str, 
+             obj_type:          Type[Y], 
+             *,
+             strict_type_check: bool = True,
+             raise_type_error:  bool = True) -> "Stream[Y]":
+        def iterator() -> Iterator[Y]:
+            y_type = cast(Type[Y], obj_type.mro()[0])
+            with open(path, "rb") as file:
+                while True:
+                    try:
+                        obj = dill.load(file)
+                        if strict_type_check:
+                            if type(obj) is y_type:
+                                yield obj
+                            elif raise_type_error:
+                                raise TypeError(f"Unpickled object is of incorrect type: {type(obj)}, expected: {y_type}")
+                        else:
+                            if isinstance(obj, y_type):
+                                yield obj
+                            elif raise_type_error:
+                                raise TypeError(f"Unpickled object is of incorrect type: {type(obj)}, expected: {y_type}")
+                    except EOFError:
+                        break
+
+        return Stream(iterator())
+    
+    @staticmethod
+    def empty() -> "Stream[Never]":
+        return Stream(tuple(), expected_size=0)
+    
+    @staticmethod
+    def sample(population:          Sequence[Y],
+               with_replacement:    bool,
+               weights:             Sequence[int|float]|Callable[[Y],int|float]|None = None) -> "Stream[Y]":
+        
+        population_list = list(population)
+
+        if not population_list:
+            return Stream.empty()
+        
+        if isinstance(weights, Sequence):
+            weights_list = list(weights)
+            
+            if len(weights_list) != len(population_list):
+                raise ValueError(f"Length of population: {len(population_list)} differs from length of weights: {len(weights_list)}")
+        else:
+            weights_list = (Stream(population_list)
+                    .map((lambda _: 1) if weights is None else weights)
+                    .map(abs)
+                    .list())
+        
+        if with_replacement:
+            cum_weights = (Stream(weights_list)
+                           .scan(0.0, lambda y,x: y+x)
+                           .list())
+
+            return Stream(lambda: random.choices(
+                population=population_list,
+                cum_weights=cum_weights,
+                k=1
+                )[0])
+        else:
+            def iterator() -> Iterator[Y]:
+                while population_list:
+                    try:
+                        choice = random.choices(
+                            population=range(len(population_list)),
+                            weights=weights_list,
+                            k=1
+                            )[0]
+                    except ValueError:
+                        choice = random.choices(
+                            population=range(len(population_list)),
+                            k=1
+                            )[0]
+                    
+                    weights_list.pop(choice)
+                    yield population_list.pop(choice)
+
+            return Stream(iterator(), expected_size=len(population_list))
+
+    def run(self) -> None:
         for _ in self:
             pass
     
@@ -586,7 +670,3 @@ class Stream(Iterable[X]):
 
     def __iter__(self) -> Iterator[X]:
         return iter(self._source)
-    
-    @staticmethod
-    def empty() -> "Stream[Never]":
-        return Stream(tuple(), expected_size=0)
