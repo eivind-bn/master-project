@@ -17,16 +17,18 @@ Domain: TypeAlias = Literal[
     "reconstruction classification"
     ]
 
+@dataclass
+class MNISTFeedForward(Generic[Sl], FeedForward[Sx,Sy]):
+    parent:         "MNIST[Sl]"
+    embedding:      FeedForward[Sx,Sl]
+    reconstruction: FeedForward[Sl,Sx]
+    classification: FeedForward[Sl,Sy]
+    
+    def digits(self) -> Tuple[int,...]:
+        return tuple(self.classification().reshape((-1,10)).argmax(dim=1))
+
 class MNIST(Generic[Sl], Network[Sx,Sy]):
-    @dataclass
-    class FeedForward(Network.FeedForward):
-        parent:         "MNIST[Sl]"
-        embedding:      Network.FeedForward
-        reconstruction: Network.FeedForward
-        classification: Network.FeedForward
-        
-        def digits(self) -> Tuple[int,...]:
-            return tuple(self.classification().reshape((-1,10)).argmax(dim=1))
+
 
     def __init__(self, 
                  latent_shape:                      Sl,
@@ -103,7 +105,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
             loss_criterion: Loss = "MSELoss",
             early_stop_cont: int|None = 10,
             verbose: bool = False,
-            info: str | None = None) -> TrainStats:
+            info: str | None = None) -> TrainHistory:
           return self.autoencoder.decoder.adam().fit(
               X_train=self(self.train_data).embedding(),
               Y_train=self.train_data,
@@ -123,7 +125,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
                         loss_criterion: Loss = "MSELoss",
                         early_stop_cont: int|None = 10,
                         verbose: bool = False,
-                        info: str | None = None) -> TrainStats:
+                        info: str | None = None) -> TrainHistory:
           return self.autoencoder.adam().fit(
              X_train=self.train_data,
              Y_train=self.train_data,
@@ -143,7 +145,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
                     loss_criterion: Loss = "MSELoss",
                     early_stop_cont: int|None = 10,
                     verbose: bool = False,
-                    info: str | None = None) -> TrainStats:
+                    info: str | None = None) -> TrainHistory:
           return self.autoencoder.decoder.adam().fit(
              X_train=self(self.train_data).embedding(),
              Y_train=self.train_data,
@@ -162,7 +164,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
                             batch_size: int,
                             early_stop_cont: int|None = 10,
                             verbose: bool = False,
-                            info: str | None = None) -> TrainStats:
+                            info: str | None = None) -> TrainHistory:
          return self.classifier_head.adam().fit(
              X_train=self(self.train_data).embedding(),
              Y_train=self.train_labels,
@@ -182,7 +184,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
                        batch_size: int,
                        early_stop_cont: int|None = 10,
                        verbose: bool = False,
-                       info: str | None = None) -> TrainStats:
+                       info: str | None = None) -> TrainHistory:
         return (self.autoencoder.encoder + self.classifier_head).adam().fit(
             X_train=self.train_data,
             Y_train=self.train_labels,
@@ -199,7 +201,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
     def __call__(self, X: Array|Lazy[Array]|"MNIST.FeedForward") -> "FeedForward":
         autoencoding = self.autoencoder(X)
         classification = self.classifier_head(autoencoding.embedding)
-        return self.FeedForward(
+        return MNISTFeedForward(
             parent=self,
             input=autoencoding.input,
             output=classification.output,

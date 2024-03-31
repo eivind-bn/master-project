@@ -4,17 +4,36 @@ from plotly.graph_objects import Figure # type: ignore
 
 import plotly.express as px # type: ignore
 
-@dataclass(frozen=True)
-class TrainStats:
-    batch_size:     Tuple[int,...]
-    train_losses:   Tuple[float,...]
-    val_losses:     Tuple[float,...]|None
-    accuracies:     Tuple[float,...]|None
-    info:           str|None
+class TrainRecord(NamedTuple):
+    batch_size: int
+    train_loss: float
+    val_loss:   float|None
+    accuracy:   float|None
+    info:       str|None
 
-    def plot_loss(self, 
-                  info: str|None = None, 
-                  batch_size: bool = False) -> Figure:
+class TrainHistory(list[TrainRecord]):
+
+    def append_epoch(self,
+                     batch_size: int,
+                     train_loss: float,
+                     val_loss:   float|None = None,
+                     accuracy:   float|None = None,
+                     info:       str|None = None) -> None:
+        self.append(TrainRecord(
+            batch_size=batch_size,
+            train_loss=train_loss,
+            val_loss=val_loss,
+            accuracy=accuracy,
+            info=info
+        ))
+
+    def figure(self, 
+               info: str|None = None, 
+               batch_size: bool = False) -> Figure:
+        
+        for epoch,record in enumerate(self):
+            pass
+
         epochs_name = "epochs"
         train_loss_name = "train-loss"
         y_trends: List[str] = [train_loss_name]
@@ -38,13 +57,4 @@ class TrainStats:
             y_trends.append(batch_size_name)
             stats[batch_size_name] = self.batch_size
 
-        return px.line(stats, x=epochs_name, y=y_trends, title=info if info else self.info)      
-    
-    def __getitem__(self, slice: slice) -> "TrainStats":
-        return TrainStats(
-            batch_size=self.batch_size,
-            train_losses=self.train_losses[slice],
-            val_losses=None if self.val_losses is None else self.val_losses[slice],
-            accuracies=None if self.accuracies is None else self.accuracies[slice],
-            info=self.info
-        )
+        return px.line(stats, x=epochs_name, y=y_trends, title=info if info else self.info).add_li

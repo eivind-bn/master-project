@@ -69,7 +69,7 @@ class Optimizer(ABC):
             is_correct:         Callable[[Tensor,Tensor],Tensor]|None = None,
             early_stop_count:   int|None = None,
             verbose:            bool = False,
-            info:               str|None = None) -> TrainStats:
+            info:               str|None = None) -> TrainHistory:
         
         assert len(X_train) == len(Y_train), f"Length of X_train={len(X_train)} differs from length of Y_train={len(Y_train)}"
         assert 0 < batch_size <= len(X_train), f"{batch_size=} is not between 0 and {len(X_train)}"
@@ -138,23 +138,22 @@ class Optimizer(ABC):
                 x_train,y_train = mini_batch(X_train, Y_train)
                 y_hat_train = self._network(x_train).output()
                 train_loss: Tensor = loss_function(y_hat_train, y_train)
-                self._network.batch_sizes.append(batch_size)
-                self._network.train_losses.append(float(train_loss.item()))
                 train_loss.backward()
                 optimizer.step()
+
+                val_loss: float|None = None
+                accuracy: float|None = None
 
                 if X_val is not None and Y_val is not None:
                     x_val,y_val = mini_batch(X_val, Y_val)
                     y_hat_val = self._network(x_val).output()
                     val_loss = float(loss_function(y_hat_val, y_val).item())
-                    self._network.validation_losses.append(val_loss)
 
                     if is_correct is not None:
                         correct_classification = is_correct(y_hat_val, y_val).reshape((batch_size,1))
                         if correct_classification.dtype != torch.bool:
                             raise ValueError(f"Expected accuracy tensor to consist of bool dtype, but found: {correct_classification.dtype}")
                         accuracy = float((correct_classification.count_nonzero() / correct_classification.nelement()).item())
-                        self._network.accuracies.append(accuracy)
 
                     if early_stop(val_loss):
                         bar.set_description(f"Early stopping! Train-loss: {train_loss:.6f}, Val-loss: {val_loss:.6f}")
@@ -164,9 +163,16 @@ class Optimizer(ABC):
                 else:
                     bar.set_description(f"Loss: {train_loss:.6f}")
 
+                self._network.train_history.append_epoch(
+                    batch_size=batch_size,
+                    train_loss=float(train_loss.item()),
+                    val_loss=val_loss,
+                    accuracy=accuracy,
+                    info=info
+                )
                 bar.update()
 
-        return self._network.train_stats(info)
+        return self._network.train_history
 
 class SGD(Optimizer):
     class Params(TypedDict, total=False):
