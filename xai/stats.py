@@ -4,14 +4,31 @@ from plotly.graph_objects import Figure # type: ignore
 
 import plotly.express as px # type: ignore
 
-class TrainRecord(NamedTuple):
+class Epoch(NamedTuple):
     batch_size: int
     train_loss: float
     val_loss:   float|None
     accuracy:   float|None
     info:       str|None
 
-class TrainHistory(list[TrainRecord]):
+class Milestone:
+
+    def __init__(self, info: str|None = None) -> None:
+        self.epochs: List[Epoch] = []
+        info = info
+
+class TrainHistory:
+
+    def __init__(self) -> None:
+        self.milestones: List[Milestone] = []
+
+    def __enter__(self, info: str|None = None) -> Callable[[Epoch],None]:
+        milestone = Milestone(info=info)
+        self.milestones.append(milestone)
+        return milestone.epochs.append
+    
+    def __exit__(self, *args, **kwargs) -> None:
+        pass
 
     def append_epoch(self,
                      batch_size: int,
@@ -19,7 +36,7 @@ class TrainHistory(list[TrainRecord]):
                      val_loss:   float|None = None,
                      accuracy:   float|None = None,
                      info:       str|None = None) -> None:
-        self.append(TrainRecord(
+        self.append(Epoch(
             batch_size=batch_size,
             train_loss=train_loss,
             val_loss=val_loss,

@@ -4,8 +4,7 @@ import dill # type: ignore
 import random
 
 from dataclasses import dataclass
-from multiprocessing import Pool
-from multiprocessing.pool import ThreadPool
+from multiprocessing.pool import Pool as ProcessPool, ThreadPool
 from tqdm import tqdm
 
 if TYPE_CHECKING:
@@ -418,23 +417,16 @@ class Stream(Iterable[X]):
     def any(self, f: Callable[[X],bool]) -> bool:
         return any(f(x) for x in self)
     
-    def fork(self,
-             type:          Literal["process","thread"],
-             f:             Callable[[X],Y],
-             max_forks:     int|None = None) -> "Stream[Y]":
-        if type == "process":
-            return self.fork_processes(f, max_forks)
-        elif type == "thread":
-            return self.fork_threads(f, max_forks)
-        else:
-            assert_never(type)
+    def fork(self, fork: Callable[[Self],"Stream[Y]"]) -> "Stream[Y]":
+        with ProcessPool(4) as p:
+            p.apply()
     
     def fork_processes(self, 
                        f:             Callable[[X],Y], 
                        max_processes: int|None = None) -> "Stream[Y]":
 
         def iterator() -> Iterator[Y]:
-            with Pool(processes=max_processes) as pool:
+            with ProcessPool(processes=max_processes) as pool:
                 for y in pool.imap(func=_DillPickle(f), iterable=self):
                     yield y
 
