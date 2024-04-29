@@ -28,7 +28,7 @@ from .population import Population as Population
 from .record import InterpolationMode as InterpolationMode, Recorder as Recorder
 from .reflist import EntryRejection as EntryRejection, EvictionPolicy as EvictionPolicy, Location as Location, RefList as RefList
 from .reward import Reward as Reward
-from .stats import TrainHistory as TrainHistory, TrainRecord as TrainRecord
+from .stats import TrainHistory as TrainHistory, Epoch as Epoch
 from .stream import Stream as Stream
 from .time import Days as Days, Hours as Hours, MicroSeconds as MicroSeconds, MilliSeconds as MilliSeconds, Minutes as Minutes, NanoSeconds as NanoSeconds, Seconds as Seconds, Time as Time
 from .unit import Centi as Centi, Deca as Deca, Deci as Deci, Exa as Exa, Giga as Giga, Hecto as Hecto, Kilo as Kilo, Mega as Mega, Micro as Micro, Milli as Milli, Nano as Nano, Peta as Peta, Tera as Tera, Unit as Unit
