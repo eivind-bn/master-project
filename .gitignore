@@ -166,5 +166,5 @@ dataset/
 *.pt
 *.npy
 mnist.model
-Videos
-Images
+videos
+mages
