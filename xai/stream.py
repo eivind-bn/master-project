@@ -417,10 +417,6 @@ class Stream(Iterable[X]):
     def any(self, f: Callable[[X],bool]) -> bool:
         return any(f(x) for x in self)
     
-    def fork(self, fork: Callable[[Self],"Stream[Y]"]) -> "Stream[Y]":
-        with ProcessPool(4) as p:
-            p.apply()
-    
     def fork_processes(self, 
                        f:             Callable[[X],Y], 
                        max_processes: int|None = None) -> "Stream[Y]":

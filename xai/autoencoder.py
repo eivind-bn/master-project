@@ -9,11 +9,23 @@ X = TypeVar("X", bound=Tuple[int,...])
 L = TypeVar("L", bound=Tuple[int,...]) 
 
 @dataclass
-class AutoEncoderFeedForward(Generic[X,L], FeedForward[X,X]):
+class AutoEncoderFeedForward(Generic[X,L]):
+    parent:         "AutoEncoder[X,L]"
+    input:          Tensor
     embedding:      FeedForward[X,L]
     reconstruction: FeedForward[L,X]
 
-class AutoEncoder(Generic[X,L], Network[X,X]):
+    def explain_encoding(self, 
+                         algorithm:     Explainer|Explainers, 
+                         background:    Array|None) -> Explanation[L,X]:
+        return self.embedding.explain(algorithm, background)
+    
+    def explain_reconstruction(self, 
+                               algorithm:   Explainer|Explainers, 
+                               background:  Array|None) -> Explanation[X,L]:
+        return self.reconstruction.explain(algorithm, background)
+
+class AutoEncoder(Generic[X,L], Serializable["AutoEncoder"]):
 
     def __init__(self, 
                  data_shape:        X, 
@@ -24,6 +36,7 @@ class AutoEncoder(Generic[X,L], Network[X,X]):
                  device:            Device = "auto") -> None:
         
         self.latent_shape = latent_shape
+        self.explainers: Dict[Type[Explainer],Tuple[Array,Explainer]] = {}
         
         self.encoder = Network.dense(
             input_dim=data_shape,
@@ -36,7 +49,7 @@ class AutoEncoder(Generic[X,L], Network[X,X]):
         self.decoder = Network.dense(
             input_dim=self.encoder.output_shape,
             output_dim=self.encoder.input_shape,
-            hidden_layers=hidden_layers,
+            hidden_layers=hidden_layers[::-1] if isinstance(hidden_layers, Sequence) else hidden_layers,
             hidden_activation=hidden_activation,
             output_activation=output_activation,
             device=device
@@ -60,13 +73,12 @@ class AutoEncoder(Generic[X,L], Network[X,X]):
     def output_shape(self) -> X:
         return self.decoder.output_shape
 
-    def __call__(self, X: Array|Lazy[Array]|AutoEncoderFeedForward[Ints,X]) -> AutoEncoderFeedForward[X,X]:
+    def __call__(self, X: Array|Lazy[Array]) -> AutoEncoderFeedForward[X,X]:
         embedding = self.encoder(X)
-        reconstruction = self.decoder(embedding)
+        reconstruction = self.decoder(embedding.output())
         return AutoEncoderFeedForward(
             parent=self,
             input=embedding.input,
             embedding=embedding,
             reconstruction=reconstruction,
-            output=reconstruction.output,
         )

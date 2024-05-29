@@ -10,15 +10,56 @@ import random
 import numpy as np
 import copy
 
+
+
 class DQN(Agent):
     @dataclass
     class Step(Agent.Step):
+        parent:     "DQN"
         state:      Tensor
         next_state: Tensor
         action_id:  int
 
+        def explain_latents(self, algorithm: Explainer|Explainers, background: Array|None = None) -> Explanation:
+            return self.parent._autoencoder.decoder(self.next_state[0,-32:]).explain(algorithm, background)
+        
+        def explain_eap(self, 
+                        algorithm: Explainer|Explainers, 
+                        decoder_background: Array|None = None,
+                        q_background: Array|None = None) -> Explanation:
+            l_explanation = self.explain_latents(algorithm, decoder_background).flatten()
+            q_explanation = self.parent._policy(self.next_state).explain(algorithm, q_background).flatten()
+            weights = l_explanation.attribution_weights().shap_values
+            shap_values = q_explanation.shap_values.reshape((5,4,32)).sum(1)@weights.T
+            shap_values = shap_values.reshape((5,210,160,3)).sum(3)
+            return Explanation(
+                class_shape=(5,),
+                feature_shape=(210,160),
+                shap_values=shap_values,
+                compute_time=l_explanation.compute_time + q_explanation.compute_time
+            )
+        
+        def explain_esp(self, 
+                        algorithm: Explainer|Explainers, 
+                        decoder_background: Array|None = None,
+                        q_background: Array|None = None) -> Explanation:
+            l_explanation = self.explain_latents(algorithm, decoder_background).flatten()
+            q_explanation = self.parent._policy(self.next_state).explain(algorithm, q_background).flatten()
+            weights = l_explanation.contribution_weights().shap_values
+            shap_values = q_explanation.shap_values.reshape((5,4,32)).sum(1)@weights.T
+            shap_values = shap_values.reshape((5,210,160,3)).sum(3)
+            return Explanation(
+                class_shape=(5,),
+                feature_shape=(210,160),
+                shap_values=shap_values,
+                compute_time=l_explanation.compute_time + q_explanation.compute_time
+            )
+
         def reward_sum(self) -> int:
             return sum(reward.value for reward in self.rewards)
+        
+        def count_none_zero_rewards(self) -> int:
+            return sum(1 for reward in self.rewards if reward != Reward.NONE)
         
         def numpy(self) -> Dict[str,NDArray]:
             return {
@@ -40,6 +81,9 @@ class DQN(Agent):
                 Actions.RIGHT,
                 Actions.FIRE
                 )
+        self.rewards_per_episode: List[int] = []
+        self.exploration_rate_per_episode: List[float] = []
+        
         if device == "auto":
             self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
@@ -97,16 +141,14 @@ class DQN(Agent):
                 if env.running():
                     if skip_cnt < frame_skips:
                         skip_cnt += 1
-                        action_id = random.randrange(0, len(self._actions))
-                        action = self._actions[action_id]
                     else:
                         skip_cnt = 0
                         if explore():
                             action_id = random.randrange(0, len(self._actions))
                             action = self._actions[action_id]
                         else:
-                            q_values: Tensor = self._policy(state).output()
-                            action_id = int(q_values.argmax(1).item())
+                            q_values = self._policy(state)
+                            action_id = int(q_values().argmax(1).item())
                             action = self._actions[action_id]
 
                     observation,rewards = env.step(action)
@@ -115,6 +157,7 @@ class DQN(Agent):
                     next_state = torch.stack(tuple(latents)).reshape((1,-1))
 
                     yield DQN.Step(
+                        parent=self,
                         observation=observation,
                         action=action,
                         rewards=rewards,
@@ -145,7 +188,9 @@ class DQN(Agent):
               initial_exploration_rate:         float = 1.0,
               final_exploration_rate:           float = 0.05,
               final_exploration_rate_progress:  float = 0.75,
-              verbose:                          bool = True) -> None:
+              verbose:                          bool = True,
+              q_value_head_background_freq:     int = 25,
+              q_value_head_background_path:     str|None = None) -> None:
         
         exploration_rate = initial_exploration_rate
         
@@ -183,12 +228,18 @@ class DQN(Agent):
             for time_step,step in stepper.enumerate().take(total_time_steps):
 
                 if step.done:
+                    self.rewards_per_episode.append(total_reward)
+                    self.exploration_rate_per_episode.append(exploration_rate)
                     total_reward = 0
+                    if episode % q_value_head_background_freq == 0 and q_value_head_background_path:
+                        states = replay_buffer.data(False)["state"]
+                        np.save(q_value_head_background_path, states)
+
                     episode += 1
                     if save_path is not None and episode % episode_save_freq == 0:
                         self.save(save_path)
 
-                total_reward += step.reward_sum()
+                total_reward += step.count_none_zero_rewards()
 
                 replay_buffer.append(step.numpy())
 

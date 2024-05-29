@@ -50,26 +50,14 @@ class Explainer(Generic[C,F], ABC):
 
         self._flattened_network = input + network + output
 
-        self._explainer = self._init_explainer(self._feature_rows(background))
-
-        self._base_values: NDArray[float64]|None = None
+        self._background = self._feature_rows(background)
+        self._explainer = self._init_explainer(background)
 
 
     @property
     @abstractmethod
     def _array_type(self) -> "Type[Array]":
         pass
-
-    @property
-    def base_values(self) -> NDArray[float64]:
-        with torch.no_grad():
-            if self._base_values is None:
-                X_background = self._explainer.masker.data
-                Y_hat_background = self._flattened_network(X_background).output()
-                Y_hat_average = Y_hat_background.mean(dim=0).reshape(self._class_shape)
-                self._base_values = Y_hat_average.cpu().numpy()
-
-            return self._base_values
 
     @abstractmethod
     def _init_explainer(self, background: "Array") -> shap.Explainer:
@@ -118,33 +106,11 @@ class Explainer(Generic[C,F], ABC):
 
         return Stream(iterator())
 
-    @staticmethod
-    def new(type:       Explainers, 
-            network:    "Network[F,C]", 
-            background: "Array", 
-            logistic:   bool) -> "Explainer[C,F]":
-
-        match type:
-            case "exact":
-                return ExactExplainer(network, background, logistic=logistic)
-            case "permutation":
-                return PermutationExplainer(network, background, logistic=logistic)
-            case "deep":
-                return DeepExplainer(network, background)
-            case "kernel":
-                return KernelExplainer(network, background, logistic=logistic)
-            case "gradient":
-                return GradientExplainer(network, background)
-            case _:
-                assert_never(type)
-
 class ExactExplainer(Explainer[C,F]):
 
     def __init__(self, 
                  network:       "Network[F,C]", 
-                 background:    "Array",
-                 logistic:      bool) -> None:
-        self._logistic = logistic
+                 background:    "Array") -> None:
         super().__init__(network, background)
 
     @property
@@ -154,8 +120,7 @@ class ExactExplainer(Explainer[C,F]):
     def _init_explainer(self, background: "Array") -> shap.Explainer:
         return shap.ExactExplainer(
             model=self._call_network_func,
-            masker=self._feature_rows(background),
-            link=shap.links.logit if self._logistic else shap.links.identity
+            masker=self._feature_rows(background)
             )
 
     def _explain_single(self, 
@@ -182,7 +147,6 @@ class ExactExplainer(Explainer[C,F]):
             class_shape=self._class_shape,
             feature_shape=self._feature_shape,
             compute_time=Seconds(explanation.compute_time),
-            base_values=base_values,
             shap_values=shap_values,
         )
 
@@ -190,9 +154,7 @@ class PermutationExplainer(Explainer[C,F]):
 
     def __init__(self, 
                  network:       "Network[F,C]", 
-                 background:    "Array",
-                 logistic:      bool) -> None:
-        self._logistic = logistic
+                 background:    "Array") -> None:
         super().__init__(network, background)
 
     @property
@@ -203,7 +165,6 @@ class PermutationExplainer(Explainer[C,F]):
         return shap.PermutationExplainer(
             model=self._call_network_func, 
             masker=self._feature_rows(background),
-            link=shap.links.logit if self._logistic else shap.links.identity
             )
 
     def _explain_single(self, 
@@ -230,7 +191,6 @@ class PermutationExplainer(Explainer[C,F]):
             class_shape=self._class_shape,
             feature_shape=self._feature_shape,
             compute_time=Seconds(explanation.compute_time),
-            base_values=base_values,
             shap_values=shap_values,
         )
         
@@ -238,9 +198,7 @@ class KernelExplainer(Explainer[C,F]):
 
     def __init__(self, 
                  network:       "Network[F,C]", 
-                 background:    "Array",
-                 logistic:      bool) -> None:
-        self._logistic = logistic
+                 background:    "Array") -> None:
         super().__init__(network, background)
         
     @property
@@ -251,31 +209,42 @@ class KernelExplainer(Explainer[C,F]):
         return shap.KernelExplainer(
             model=self._call_network_func, 
             data=shap.kmeans(self._feature_rows(background), 100),
-            link="logit" if self._logistic else "identity"
             )
 
     def _explain_single(self, 
                         flat_sample:    "Array", 
                         max_evals:      int|None = 100_000) -> Explanation[C,F]:
         
+        
         if max_evals is None:
             max_evals = 2*self._feature_size + 2048
 
         self._explainer: shap.KernelExplainer
-        explanation: shap.Explanation = self._explainer(flat_sample)
+
+        zero_time = Seconds.now()
+        shap_values: shap.Explanation = self._explainer.shap_values(flat_sample, nsamples=max_evals)
+        end_time = Seconds.now() - zero_time
+
+        if isinstance(shap_values, list):
+            shap_values = np.stack(shap_values, axis=-1)
+
+        if hasattr(self._explainer.expected_value, "__len__"):
+            base_values = np.tile(self._explainer.expected_value, (shap_values.shape[0],1))
+        else:
+            base_values = np.tile(self._explainer.expected_value, shap_values.shape[0])
         
-        shap_values = np.reshape(explanation.values, (self._feature_size, self._class_size))
+        shap_values = np.reshape(shap_values, (self._feature_size, self._class_size))
         shap_values = np.moveaxis(shap_values, 0, 1)
         shap_values = shap_values.reshape(self._class_shape + self._feature_shape)
 
-        base_values = np.reshape(explanation.base_values, (self._class_size,))
+        base_values = np.reshape(self._explainer.expected_value, (self._class_size,))
         base_values = base_values.reshape(self._class_shape)
 
+        
         return Explanation(
             class_shape=self._class_shape,
             feature_shape=self._feature_shape,
-            compute_time=Seconds(explanation.compute_time),
-            base_values=base_values,
+            compute_time=end_time,
             shap_values=shap_values,
         )
 
@@ -288,7 +257,7 @@ class DeepExplainer(Explainer[C,F]):
     @property
     def base_values(self) -> NDArray[float64]:
         with torch.no_grad():
-            if self._base_values is None:
+            if not hasattr(self, "_base_values"):
                 expected_value: np.ndarray = self._explainer.explainer.expected_value
                 self._base_values = expected_value.astype(np.float64)
 
@@ -314,7 +283,6 @@ class DeepExplainer(Explainer[C,F]):
             class_shape=self._class_shape,
             feature_shape=self._feature_shape,
             compute_time=end_time,
-            base_values=self.base_values,
             shap_values=explanation,
         )
     
@@ -327,11 +295,12 @@ class GradientExplainer(Explainer[C,F]):
     @property
     def base_values(self) -> NDArray[float64]:
         with torch.no_grad():
-            if self._base_values is None:
-                expected_value: np.ndarray = torch.stack(self._explainer.explainer.data).cpu().numpy()
+            if not hasattr(self, "_base_values"):
+                expected_value: np.ndarray = np.mean(self._flattened_network(self._feature_rows(self._background)).output().numpy(force=True), axis=0)
                 self._base_values = expected_value.astype(np.float64)
 
             return self._base_values
+
 
     def _init_explainer(self, background: "Array") -> shap.Explainer:
         return shap.GradientExplainer(
@@ -356,6 +325,5 @@ class GradientExplainer(Explainer[C,F]):
             class_shape=self._class_shape,
             feature_shape=self._feature_shape,
             compute_time=end_time,
-            base_values=self.base_values,
             shap_values=explanation,
         )

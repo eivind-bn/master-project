@@ -22,7 +22,6 @@ class Explanation(Generic[C,F]):
                  class_shape:   C, 
                  feature_shape: F, 
                  compute_time:  Seconds,
-                 base_values:   NDArray[float64],
                  shap_values:   NDArray[float64]) -> None: ...
         
     @overload
@@ -37,14 +36,13 @@ class Explanation(Generic[C,F]):
                  class_shape:   C, 
                  feature_shape: F, 
                  compute_time:  Seconds|None = None,
-                 base_values:   NDArray[float64]|None = None,
                  shap_values:   NDArray[float64]|None = None,
                  explanation:   shap.Explanation|None = None) -> None:
         super().__init__()
         self._class_shape = class_shape
         self._feature_shape = feature_shape
         
-        if compute_time is None or shap_values is None or base_values is None:
+        if compute_time is None or shap_values is None:
             if explanation is None:
                 raise ValueError()
             
@@ -59,7 +57,6 @@ class Explanation(Generic[C,F]):
                 raise ValueError()
                       
             self._shap_values = shap_values
-            self._base_values = base_values
             self._compute_time = compute_time
 
         shap_values_shape = self._class_shape + self._feature_shape
@@ -80,10 +77,6 @@ class Explanation(Generic[C,F]):
     @property
     def shap_values(self) -> NDArray[float64]:
         return self._shap_values
-    
-    @property
-    def base_values(self) -> NDArray[float64]:
-        return self._base_values
 
     @property
     def compute_time(self) -> Seconds:
@@ -97,7 +90,6 @@ class Explanation(Generic[C,F]):
             class_shape=self.feature_shape,
             feature_shape=self.class_shape,
             shap_values=np.moveaxis(self.shap_values, old_feature_axes, new_feature_axes),
-            base_values=self.base_values
         )
     
     def reshape(self, 
@@ -107,7 +99,6 @@ class Explanation(Generic[C,F]):
             class_shape=class_shape,
             feature_shape=feature_shape,
             shap_values=self.shap_values.reshape(class_shape + feature_shape),
-            base_values=self.base_values.reshape(class_shape)
         )
     
     def flatten(self) -> "Explanation[Int,Int]":
@@ -116,7 +107,7 @@ class Explanation(Generic[C,F]):
             feature_shape=(math.prod(self.feature_shape),)
         )
 
-    def combine(self, other: "Explanation[C2,F]") -> "Explanation[C,C2]":
+    def conjunct(self, other: "Explanation[C2,F]") -> "Explanation[C,C2]":
         self._assert_shape(other, feature_shape=self.feature_shape)
         A = self.flatten()
         B = other.flatten()
@@ -124,6 +115,34 @@ class Explanation(Generic[C,F]):
             class_shape=self.class_shape,
             feature_shape=other.class_shape
         )
+    
+    def attribution_weights(self) -> "Explanation[C,F]":
+        flattened = self.flatten().shap_values
+        weights: NDArray[float64] = np.abs(flattened)/np.sum(np.abs(flattened), axis=0)
+        return Explanation(
+            class_shape=self.class_shape,
+            feature_shape=self.feature_shape,
+            compute_time=self.compute_time,
+            shap_values= weights.reshape(self.class_shape + self.feature_shape)
+        )
+    
+    def contribution_weights(self) -> "Explanation[C,F]":
+        flattened = self.flatten().shap_values
+        weights: NDArray[float64] = flattened/np.sum(np.abs(flattened), axis=0)
+        return Explanation(
+            class_shape=self.class_shape,
+            feature_shape=self.feature_shape,
+            compute_time=self.compute_time,
+            shap_values= weights.reshape(self.class_shape + self.feature_shape)
+        )
+    
+    def eap(self, other: "Explanation[C2,F]") -> "Explanation[C,C2]":
+        self._assert_shape(other, feature_shape=self.feature_shape)
+        return self.conjunct(other.attribution_weights())
+    
+    def esp(self, other: "Explanation[C2,F]") -> "Explanation[C,C2]":
+        self._assert_shape(other, feature_shape=self.feature_shape)
+        return self.conjunct(other.contribution_weights())
     
     def max(self) -> float:
         return float(self.shap_values.max())
@@ -134,32 +153,29 @@ class Explanation(Generic[C,F]):
             feature_shape=self.feature_shape,
             compute_time=self.compute_time,
             shap_values=np.abs(self.shap_values),
-            base_values=self.base_values
         )
     
     def class_sum(self) -> "Explanation[Tuple[Literal[1]],F]":
         class_axis_cnt = len(self.class_shape)
         axes = tuple(range(class_axis_cnt))
-        values = self.shap_values.sum(axes)
+        values: NDArray[float64] = self.shap_values.sum(axes)
         return Explanation(
             class_shape=(1,),
             feature_shape=self.feature_shape,
             compute_time=self.compute_time,
-            shap_values=values,
-            base_values=self.base_values
+            shap_values=values.reshape((1,) + self.feature_shape),
         )
     
     def feature_sum(self) -> "Explanation[C,Tuple[Literal[1]]]":
         class_axis_cnt = len(self.class_shape)
         feature_axis_cnt = len(self.feature_shape)
         axes = tuple(range(class_axis_cnt, class_axis_cnt+feature_axis_cnt))
-        values = self.shap_values.sum(axes)
+        values: NDArray[float64] = self.shap_values.sum(axes)
         return Explanation(
             class_shape=self.class_shape,
             feature_shape=(1,),
             compute_time=self.compute_time,
-            shap_values=values,
-            base_values=self.base_values
+            shap_values=values.reshape(self.class_shape + (1,)),
         )
     
     def to_rgb(self: "Explanation[C,Tuple[int,int]]", norm: float|None = None) -> NDArray[float32]:
@@ -181,28 +197,24 @@ class Explanation(Generic[C,F]):
         self._assert_shape(other, class_shape=self.class_shape, feature_shape=self.feature_shape)
         return self._compute(
             shap_values=self.shap_values + other.shap_values,
-            base_values=self.base_values + other.base_values
             )
     
     def __sub__(self, other: "Explanation[C,F]") -> "Explanation[C,F]":
         self._assert_shape(other, class_shape=self.class_shape, feature_shape=self.feature_shape)
         return self._compute(
             shap_values=self.shap_values - other.shap_values,
-            base_values=self.base_values - other.base_values
             )
     
     def __mul__(self, other: "Explanation[C,F]") -> "Explanation[C,F]":
         self._assert_shape(other, class_shape=self.class_shape, feature_shape=self.feature_shape)
         return self._compute(
             shap_values=self.shap_values * other.shap_values,
-            base_values=self.base_values * other.base_values
             )
     
     def __truediv__(self, other: "Explanation[C,F]") -> "Explanation[C,F]":
         self._assert_shape(other, class_shape=self.class_shape, feature_shape=self.feature_shape)
         return self._compute(
             shap_values=self.shap_values / other.shap_values,
-            base_values=self.base_values / other.base_values
             )
 
     def __matmul__(self, other: "Explanation[F,C2]") -> "Explanation[C,C2]":
@@ -247,42 +259,36 @@ class Explanation(Generic[C,F]):
     @overload
     def _compute(self,
                  *,
-                 shap_values:   NDArray[float64] = ...,
-                 base_values:   NDArray[float64] = ...) -> "Explanation[C,F]": ...
+                 shap_values:   NDArray[float64] = ...) -> "Explanation[C,F]": ...
 
     @overload
     def _compute(self,
                  *,
                  feature_shape: F2, 
-                 shap_values:   NDArray[float64] = ...,
-                 base_values:   NDArray[float64] = ...) -> "Explanation[C,F2]": ...
+                 shap_values:   NDArray[float64] = ...) -> "Explanation[C,F2]": ...
     
     @overload
     def _compute(self,
                  *,
                  class_shape:   C2,
-                 shap_values:   NDArray[float64] = ...,
-                 base_values:   NDArray[float64] = ...) -> "Explanation[C2,F]": ...
+                 shap_values:   NDArray[float64] = ...) -> "Explanation[C2,F]": ...
 
     @overload  
     def _compute(self,
                  *,
                  class_shape:   C2,
                  feature_shape: F2, 
-                 shap_values:   NDArray[float64] = ...,
-                 base_values:   NDArray[float64] = ...) -> "Explanation[C2,F2]": ...
+                 shap_values:   NDArray[float64] = ...) -> "Explanation[C2,F2]": ...
     
     
     def _compute(self,
                  *,
                  class_shape:   C2|None = None,
                  feature_shape: F2|None = None, 
-                 shap_values:   NDArray[float64]|None = None,
-                 base_values:   NDArray[float64]|None = None) -> "Explanation":
+                 shap_values:   NDArray[float64]|None = None) -> "Explanation":
         return Explanation(
             class_shape=self.class_shape if class_shape is None else class_shape,
             feature_shape=self.feature_shape if feature_shape is None else feature_shape,
             compute_time=self.compute_time,
             shap_values=self.shap_values if shap_values is None else shap_values,
-            base_values=self.base_values if base_values is None else base_values
         )
