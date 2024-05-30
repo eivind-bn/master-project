@@ -50,12 +50,10 @@ class FeedForward(Generic[Sx,Sy]):
         return self.derivative(to_scalars, order=1)
     
     def explain(self, 
-                algorithm:  Explainers, 
-                background: Array, 
-                max_evals:  int|None = None,
-                logistic:   bool = False) -> Explanation[Sx,Sy]:
-        explainer = self.parent.explainer(algorithm, background, logistic)
-        return explainer.explain(self.input(), max_evals=max_evals).tuple()[0]
+                algorithm:  Type[Explainer],
+                background: Array|None = None, 
+                max_evals:  int|None = None) -> Explanation[Sy,Sx]:
+        return self.parent.explainer(algorithm, background).explain(self.input(), max_evals=max_evals).item()
     
     def __call__(self) -> Tensor:
         return self.output()
@@ -68,6 +66,7 @@ class Network(Generic[Sx,Sy], ABC):
     def __init__(self) -> None:
         self._items = 1
         self.train_history = TrainHistory()
+        self.explainers: Dict[Type[Explainer],Tuple[Array,Explainer]] = {}
         
         for dim in self.output_shape:
             if dim > 0:
@@ -94,17 +93,43 @@ class Network(Generic[Sx,Sy], ABC):
     @abstractmethod
     def output_shape(self) -> Sy:
         pass
+
+    def exact_explainer(self, background: Array|None = None) -> ExactExplainer[Sy,Sx]:
+        return cast(ExactExplainer, self.explainer(ExactExplainer, background))
+
+    def permutation_explainer(self, background: Array|None = None) -> PermutationExplainer[Sy,Sx]:
+        return cast(PermutationExplainer, self.explainer(PermutationExplainer, background))
+    
+    def kernel_explainer(self, background: Array|None = None) -> KernelExplainer[Sy,Sx]:
+        return cast(KernelExplainer, self.explainer(KernelExplainer, background))
+    
+    def deep_explainer(self, background: Array|None = None) -> DeepExplainer[Sy,Sx]:
+        return cast(DeepExplainer, self.explainer(DeepExplainer, background))
+
+    def gradient_explainer(self, background: Array|None = None) -> GradientExplainer[Sy,Sx]:
+        return cast(GradientExplainer, self.explainer(GradientExplainer, background))
     
     def explainer(self, 
-                  type:         Explainers, 
-                  background:   Array, 
-                  logistic:     bool = False) -> Explainer[Sy,Sx]:
-        return Explainer.new(
-            type=type,
-            network=self,
-            background=background,
-            logistic=logistic
-        )
+                  algorithm: Type[Explainer]|Explainers, 
+                  background: Array|None = None) -> Explainer[Sy,Sx]:
+        if isinstance(algorithm, str):
+            algorithm = {
+                "exact": ExactExplainer,
+                "permutation": PermutationExplainer,
+                "deep": DeepExplainer,
+                "kernel": KernelExplainer,
+                "gradient": GradientExplainer
+            }[algorithm]
+
+        if background is not None:
+            if algorithm in self.explainers:
+                old_background, explainer = self.explainers[algorithm]
+                if old_background is background:
+                    return explainer
+                
+            self.explainers[algorithm] = (background, algorithm(self, background))
+
+        return self.explainers[algorithm][1]
     
     def sgd(self, **params: Unpack[SGD.Params]) -> SGD:
         return SGD(network=self, **params)

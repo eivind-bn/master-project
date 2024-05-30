@@ -2,6 +2,7 @@ from . import *
 from dataclasses import dataclass
 from torch import Tensor
 from torch.nn import Module
+from torchvision.datasets import MNIST as TorchVisionMNIST # type: ignore
 
 import mnist # type: ignore
 import torch
@@ -18,16 +19,33 @@ Domain: TypeAlias = Literal[
     ]
 
 @dataclass
-class MNISTFeedForward(Generic[Sl], FeedForward[Sx,Sy]):
+class MNISTFeedForward(Generic[Sl]):
     parent:         "MNIST[Sl]"
+    input:          Tensor
     embedding:      FeedForward[Sx,Sl]
     reconstruction: FeedForward[Sl,Sx]
     classification: FeedForward[Sl,Sy]
     
     def digits(self) -> Tuple[int,...]:
         return tuple(self.classification().reshape((-1,10)).argmax(dim=1))
+    
+    def explain_class(self, algorithm: Explainer|Explainers) -> Explanation[Sy,Sx]:
+        return self.parent.classifier(self.input).explain(algorithm, self.parent.background)
+    
+    def explain_latent(self, algorithm: Explainer|Explainers) -> Explanation[Sl,Sx]:
+        return self.reconstruction.explain(algorithm, self.parent.latent_background)
+    
+    def explain_class_eap(self, algorithm: Explainer|Explainers) -> Explanation[Sy,Sx]:
+        latent = self.explain_latent(algorithm)
+        cls = self.classification.explain(algorithm, self.parent.latent_background)
+        return cls.eap(latent)
+    
+    def explain_class_esp(self, algorithm: Explainer|Explainers) -> Explanation[Sy,Sx]:
+        latent = self.explain_latent(algorithm)
+        cls = self.classification.explain(algorithm, self.parent.latent_background)
+        return cls.esp(latent)
 
-class MNIST(Generic[Sl], Network[Sx,Sy]):
+class MNIST(Generic[Sl], Serializable["MNIST"]):
 
 
     def __init__(self, 
@@ -38,10 +56,10 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
                  classifier_head_hidden_Activation: Activation|None = "ReLU",
                  classifier_head_output_activation: Activation|None = "Softmax",
                  device:                            Device = "auto") -> None:
-        super().__init__()
 
         self._device = get_device(device)
-        data = torch.from_numpy(mnist.train_images()).to(device=self.device, dtype=torch.float32)
+        dataset = TorchVisionMNIST("", download=True)
+        data = dataset.train_data.to(device=self.device, dtype=torch.float32)
         data = data/255.0
         indices = torch.randperm(len(data))
         train_portion = int(len(indices)*0.8)
@@ -49,7 +67,7 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
         self.train_data = data[indices[:train_portion]]
         self.val_data = data[indices[train_portion:]]
 
-        labels = torch.from_numpy(mnist.train_labels()).to(device=self.device, dtype=torch.long)
+        labels = dataset.train_labels.to(device=self.device, dtype=torch.long)
         self.train_labels = labels[indices[:train_portion]]
         self.val_labels = labels[indices[train_portion:]]
 
@@ -79,6 +97,11 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
             device=device
         )
 
+        self.classifier = self.autoencoder.encoder + self.classifier_head
+
+        self.background: Tensor = self.val_data
+        self.latent_background: Tensor = self.autoencoder(self.background).embedding()
+
     @property
     def modules(self) -> Tuple[Module,...]:
         return (self.autoencoder.encoder + self.classifier_head).modules
@@ -99,26 +122,6 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
         idx = random.sample(self._val_indices_by_digit[digit], k=1)[0]
         return self.val_data[idx], self.val_labels[idx]
     
-    def fit(self, 
-            epochs: int,
-            batch_size: int,
-            loss_criterion: Loss = "MSELoss",
-            early_stop_cont: int|None = 10,
-            verbose: bool = False,
-            info: str | None = None) -> TrainHistory:
-          return self.autoencoder.decoder.adam().fit(
-              X_train=self(self.train_data).embedding(),
-              Y_train=self.train_data,
-              X_val=self(self.val_data).embedding(),
-              Y_val=self.val_data,
-              early_stop_count=early_stop_cont,
-              epochs=epochs,
-              batch_size=batch_size,
-              loss_criterion=loss_criterion,
-              verbose=verbose,
-              info=info
-              )
-    
     def fit_autoencoder(self, 
                         epochs: int,
                         batch_size: int,
@@ -126,30 +129,10 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
                         early_stop_cont: int|None = 10,
                         verbose: bool = False,
                         info: str | None = None) -> TrainHistory:
-          return self.autoencoder.adam().fit(
+         return (self.autoencoder.encoder + self.autoencoder.decoder).adam().fit(
              X_train=self.train_data,
              Y_train=self.train_data,
              X_val=self.val_data,
-             Y_val=self.val_data,
-             early_stop_count=early_stop_cont,
-             epochs=epochs,
-             batch_size=batch_size,
-             loss_criterion=loss_criterion,
-             verbose=verbose,
-             info=info
-         )
-    
-    def fit_decoder(self, 
-                    epochs: int,
-                    batch_size: int,
-                    loss_criterion: Loss = "MSELoss",
-                    early_stop_cont: int|None = 10,
-                    verbose: bool = False,
-                    info: str | None = None) -> TrainHistory:
-          return self.autoencoder.decoder.adam().fit(
-             X_train=self(self.train_data).embedding(),
-             Y_train=self.train_data,
-             X_val=self(self.val_data).embedding(),
              Y_val=self.val_data,
              early_stop_count=early_stop_cont,
              epochs=epochs,
@@ -178,33 +161,13 @@ class MNIST(Generic[Sl], Network[Sx,Sy]):
              verbose=verbose,
              info=info
          )
-    
-    def fit_classifier(self,                            
-                       epochs: int,
-                       batch_size: int,
-                       early_stop_cont: int|None = 10,
-                       verbose: bool = False,
-                       info: str | None = None) -> TrainHistory:
-        return (self.autoencoder.encoder + self.classifier_head).adam().fit(
-            X_train=self.train_data,
-            Y_train=self.train_labels,
-            X_val=self.val_data,
-            Y_val=self.val_labels,
-            early_stop_count=early_stop_cont,
-            epochs=epochs,
-            batch_size=batch_size,
-            loss_criterion=lambda type: type.NLLLoss(),
-            verbose=verbose,
-            info=info
-        )
 
-    def __call__(self, X: Array|Lazy[Array]|"MNIST.FeedForward") -> "FeedForward":
+    def __call__(self, X: Array|Lazy[Array]) -> MNISTFeedForward:
         autoencoding = self.autoencoder(X)
         classification = self.classifier_head(autoencoding.embedding)
         return MNISTFeedForward(
             parent=self,
             input=autoencoding.input,
-            output=classification.output,
             embedding=autoencoding.embedding,
             reconstruction=autoencoding.reconstruction,
             classification=classification

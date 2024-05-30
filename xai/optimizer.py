@@ -131,7 +131,7 @@ class Optimizer(ABC):
             idx = torch.randperm(len(X))[:batch_size]
             return X[idx], Y[idx]
 
-        with tqdm(total=epochs, desc="Step:", disable=not verbose) as bar:
+        with tqdm(total=epochs, desc="Step:", disable=not verbose) as bar, self._network.train_history as logger:
             for epoch in range(epochs):
                 optimizer = self.get_optimizer(epoch)
                 optimizer.zero_grad()
@@ -163,13 +163,12 @@ class Optimizer(ABC):
                 else:
                     bar.set_description(f"Loss: {train_loss:.6f}")
 
-                self._network.train_history.append_epoch(
+                logger(Epoch(
                     batch_size=batch_size,
                     train_loss=float(train_loss.item()),
                     val_loss=val_loss,
                     accuracy=accuracy,
-                    info=info
-                )
+                ))
                 bar.update()
 
         return self._network.train_history
