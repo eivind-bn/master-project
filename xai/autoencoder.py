@@ -9,9 +9,10 @@ X = TypeVar("X", bound=Tuple[int,...])
 L = TypeVar("L", bound=Tuple[int,...]) 
 
 @dataclass
-class AutoEncoderFeedForward(Generic[X,L]):
+class AutoEncoderFeedForward(Generic[X,L], FeedForward[X,X]):
     parent:         "AutoEncoder[X,L]"
-    input:          Tensor
+    input:          Lazy[Tensor]
+    output:         Lazy[Tensor]
     embedding:      FeedForward[X,L]
     reconstruction: FeedForward[L,X]
 
@@ -25,7 +26,7 @@ class AutoEncoderFeedForward(Generic[X,L]):
                                background:  Array|None) -> Explanation[X,L]:
         return self.reconstruction.explain(algorithm, background)
 
-class AutoEncoder(Generic[X,L], Serializable["AutoEncoder"]):
+class AutoEncoder(Generic[X,L], Network[X,X]):
 
     def __init__(self, 
                  data_shape:        X, 
@@ -36,7 +37,6 @@ class AutoEncoder(Generic[X,L], Serializable["AutoEncoder"]):
                  device:            Device = "auto") -> None:
         
         self.latent_shape = latent_shape
-        self.explainers: Dict[Type[Explainer],Tuple[Array,Explainer]] = {}
         
         self.encoder = Network.dense(
             input_dim=data_shape,
@@ -79,6 +79,7 @@ class AutoEncoder(Generic[X,L], Serializable["AutoEncoder"]):
         return AutoEncoderFeedForward(
             parent=self,
             input=embedding.input,
+            output=reconstruction.output,
             embedding=embedding,
             reconstruction=reconstruction,
         )

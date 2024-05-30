@@ -80,7 +80,7 @@ class Optimizer(ABC):
             else:
                 array = array.detach()
 
-            return array.to(device=self._network.device)
+            return array
 
         if X_val is not None and Y_val is not None:
             assert len(X_val) == len(Y_val), f"Length of X_val={len(X_val)} differs from length of Y_val={len(Y_val)}"
@@ -129,7 +129,8 @@ class Optimizer(ABC):
         
         def mini_batch(X: Tensor, Y: Tensor) -> Tuple[Tensor,Tensor]:
             idx = torch.randperm(len(X))[:batch_size]
-            return X[idx], Y[idx]
+            return (X[idx].to(device=self._network.device), 
+                    Y[idx].to(device=self._network.device))
 
         with tqdm(total=epochs, desc="Step:", disable=not verbose) as bar, self._network.train_history as logger:
             for epoch in range(epochs):
