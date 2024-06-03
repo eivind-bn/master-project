@@ -155,11 +155,17 @@ class Optimizer(ABC):
                             raise ValueError(f"Expected accuracy tensor to consist of bool dtype, but found: {correct_classification.dtype}")
                         accuracy = float((correct_classification.count_nonzero() / correct_classification.nelement()).item())
 
-                    if early_stop(val_loss):
-                        bar.set_description(f"Early stopping! Train-loss: {train_loss:.6f}, Val-loss: {val_loss:.6f}")
-                        break
+                        if early_stop(val_loss):
+                            bar.set_description(f"Early stopping! Train-loss: {train_loss:.6f}, Val-loss: {val_loss:.6f}, Accuracy: {accuracy:.2f}%")
+                            break
+                        else:
+                            bar.set_description(f"Train-loss: {train_loss:.6f}, Val-loss: {val_loss:.6f}, Accuracy: {accuracy:.2f}%")
                     else:
-                        bar.set_description(f"Train-loss: {train_loss:.6f}, Val-loss: {val_loss:.6f}")
+                        if early_stop(val_loss):
+                            bar.set_description(f"Early stopping! Train-loss: {train_loss:.6f}, Val-loss: {val_loss:.6f}")
+                            break
+                        else:
+                            bar.set_description(f"Train-loss: {train_loss:.6f}, Val-loss: {val_loss:.6f}")
                 else:
                     bar.set_description(f"Loss: {train_loss:.6f}")
 

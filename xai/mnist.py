@@ -19,9 +19,10 @@ Domain: TypeAlias = Literal[
     ]
 
 @dataclass
-class MNISTFeedForward(Generic[Sl]):
+class MNISTFeedForward(Generic[Sl], FeedForward[Sx,Sy]):
     parent:         "MNIST[Sl]"
-    input:          Tensor
+    input:          Lazy[Tensor]
+    output:         FeedForward[Sx,Sy]
     embedding:      FeedForward[Sx,Sl]
     reconstruction: FeedForward[Sl,Sx]
     classification: FeedForward[Sl,Sy]
@@ -43,9 +44,9 @@ class MNISTFeedForward(Generic[Sl]):
     def explain_class_esp(self, algorithm: Explainer|Explainers) -> Explanation[Sy,Sx]:
         latent = self.explain_latent(algorithm)
         cls = self.classification.explain(algorithm, self.parent.latent_background)
-        return cls.esp(latent)
+        return cls.ecp(latent)
 
-class MNIST(Generic[Sl], Serializable["MNIST"]):
+class MNIST(Generic[Sl], Network[Sx,Sy]):
 
 
     def __init__(self, 
@@ -53,31 +54,12 @@ class MNIST(Generic[Sl], Serializable["MNIST"]):
                  hidden_layers:                     int|Sequence[int] = 2,
                  autoencoder_hidden_activation:     Activation|None = "ReLU",
                  autoencoder_output_activation:     Activation|None = "Sigmoid",
-                 classifier_head_hidden_Activation: Activation|None = "ReLU",
+                 classifier_head_hidden_activation: Activation|None = "ReLU",
                  classifier_head_output_activation: Activation|None = "Softmax",
                  device:                            Device = "auto") -> None:
-
-        self._device = get_device(device)
-        dataset = TorchVisionMNIST("", download=True)
-        data = dataset.train_data.to(device=self.device, dtype=torch.float32)
-        data = data/255.0
-        indices = torch.randperm(len(data))
-        train_portion = int(len(indices)*0.8)
-
-        self.train_data = data[indices[:train_portion]]
-        self.val_data = data[indices[train_portion:]]
-
-        labels = dataset.train_labels.to(device=self.device, dtype=torch.long)
-        self.train_labels = labels[indices[:train_portion]]
-        self.val_labels = labels[indices[train_portion:]]
-
-        self._val_indices_by_digit: Dict[int,List[int]] = {}
-
-        for i,idx in enumerate(self.val_labels):
-            self._val_indices_by_digit.setdefault(idx.item(), []).append(i)
-
-        self.autoencoder = AutoEncoder(
-            data_shape=self.input_shape,
+        
+        autoencoder = AutoEncoder(
+            data_shape=(28,28),
             latent_shape=latent_shape,
             hidden_layers=hidden_layers,
             hidden_activation=autoencoder_hidden_activation,
@@ -88,35 +70,45 @@ class MNIST(Generic[Sl], Serializable["MNIST"]):
         if classifier_head_output_activation == "Softmax":
             classifier_head_output_activation = lambda type: type.Softmax(dim=1)
 
-        self.classifier_head = Network.dense(
-            input_dim=self.autoencoder.latent_shape,
-            output_dim=self.output_shape,
+        classifier_head = Network.dense(
+            input_dim=autoencoder.latent_shape,
+            output_dim=(10,),
             hidden_layers=hidden_layers,
-            hidden_activation=classifier_head_hidden_Activation,
+            hidden_activation=classifier_head_hidden_activation,
             output_activation=classifier_head_output_activation,
             device=device
         )
+        
+        super().__init__(
+            device=device,
+            input_shape=autoencoder.input_shape,
+            output_shape=classifier_head.output_shape,
+            logits=autoencoder.encoder + classifier_head
+        )
 
-        self.classifier = self.autoencoder.encoder + self.classifier_head
+        self.autoencoder = autoencoder
+        self.classifier_head = classifier_head
+
+        dataset = TorchVisionMNIST("", download=True)
+        data = dataset.data.to(device=self.device, dtype=torch.float32)
+        data = data/255.0
+        indices = torch.randperm(len(data))
+        train_portion = int(len(indices)*0.8)
+
+        self.train_data = data[indices[:train_portion]]
+        self.val_data = data[indices[train_portion:]]
+
+        labels = dataset.targets.to(device=self.device, dtype=torch.long)
+        self.train_labels = labels[indices[:train_portion]]
+        self.val_labels = labels[indices[train_portion:]]
+
+        self._val_indices_by_digit: Dict[int,List[int]] = {}
+
+        for i,idx in enumerate(self.val_labels):
+            self._val_indices_by_digit.setdefault(idx.item(), []).append(i)
 
         self.background: Tensor = self.val_data
         self.latent_background: Tensor = self.autoencoder(self.background).embedding()
-
-    @property
-    def modules(self) -> Tuple[Module,...]:
-        return (self.autoencoder.encoder + self.classifier_head).modules
-            
-    @property
-    def device(self) -> Device:
-        return self._device
-   
-    @property
-    def input_shape(self) -> Sx:
-        return (28,28)
-    
-    @property
-    def output_shape(self) -> Sy:
-        return (10,)
     
     def get_sample(self, digit: int) -> Tuple[Tensor,Tensor]:
         idx = random.sample(self._val_indices_by_digit[digit], k=1)[0]
@@ -129,7 +121,7 @@ class MNIST(Generic[Sl], Serializable["MNIST"]):
                         early_stop_cont: int|None = 10,
                         verbose: bool = False,
                         info: str | None = None) -> TrainHistory:
-         return (self.autoencoder.encoder + self.autoencoder.decoder).adam().fit(
+         return self.autoencoder.adam().fit(
              X_train=self.train_data,
              Y_train=self.train_data,
              X_val=self.val_data,
@@ -162,12 +154,13 @@ class MNIST(Generic[Sl], Serializable["MNIST"]):
              info=info
          )
 
-    def __call__(self, X: Array|Lazy[Array]) -> MNISTFeedForward:
+    def __call__(self, X: Array|Lazy[Array]) -> MNISTFeedForward[Sl]:
         autoencoding = self.autoencoder(X)
         classification = self.classifier_head(autoencoding.embedding)
         return MNISTFeedForward(
             parent=self,
             input=autoencoding.input,
+            output=classification,
             embedding=autoencoding.embedding,
             reconstruction=autoencoding.reconstruction,
             classification=classification

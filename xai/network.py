@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from numpy import ndarray
 from numpy.typing import NDArray
-from torch import Tensor
+from torch import Tensor, device
 from torch.nn import Parameter, Module, Sequential
 
 import torch
@@ -50,7 +50,7 @@ class FeedForward(Generic[Sx,Sy]):
         return self.derivative(to_scalars, order=1)
     
     def explain(self, 
-                algorithm:  Type[Explainer],
+                algorithm:  Type[Explainer]|Explainers,
                 background: Array|None = None, 
                 max_evals:  int|None = None) -> Explanation[Sy,Sx]:
         return self.parent.explainer(algorithm, background).explain(self.input(), max_evals=max_evals).item()
@@ -60,10 +60,55 @@ class FeedForward(Generic[Sx,Sy]):
         
     def __repr__(self) -> str:
         return str(self.output())
+    
+class Lambda(torch.nn.Module):
 
-class Network(Generic[Sx,Sy], ABC):
+    def __init__(self, 
+                 f:     Callable[[Tensor],Tensor], 
+                 repr:  Callable[["Lambda"],str]) -> None:
+        super().__init__()
+        self._f = f
+        self._repr = repr
 
-    def __init__(self) -> None:
+    def forward(self, x: Tensor) -> Tensor:
+        return self._f(x)
+    
+    def __repr__(self) -> str:
+        if self._repr is None:
+            return super().__repr__()
+        else:
+            return self._repr(self)
+        
+    def __getstate__(self) -> bytes:
+        return dill.dumps(vars(self))
+    
+    def __setstate__(self, dump: bytes) -> None:
+        self.__dict__ = dill.loads(dump)
+        
+
+class Network(Generic[Sx,Sy], Module):
+
+    def __init__(self,
+                 device:        Device,
+                 input_shape:   Sx,
+                 output_shape:  Sy,
+                 logits:        Module|None = None) -> None:
+        super().__init__()
+
+        if logits is None:
+            self._logits = Sequential()
+        elif isinstance(logits, Sequential):
+            self._logits = logits
+        else:
+            self._logits = Sequential(logits)
+
+        self._device = get_device(device)
+
+        self._logits = self._logits.to(device=self._device)
+
+        self._input_shape = input_shape
+        self._output_shape = output_shape
+
         self._items = 1
         self.train_history = TrainHistory()
         self.explainers: Dict[Type[Explainer],Tuple[Array,Explainer]] = {}
@@ -75,24 +120,20 @@ class Network(Generic[Sx,Sy], ABC):
                 raise ValueError(f"Shape axis must be positive, not {dim}")
     
     @property
-    @abstractmethod
-    def modules(self) -> Tuple[Module,...]:
-        pass
+    def modules(self) -> Sequential:
+        return self._logits
             
     @property
-    @abstractmethod
-    def device(self) -> Device:
-        pass
+    def device(self) -> device:
+        return self._device
 
     @property
-    @abstractmethod  
     def input_shape(self) -> Sx:
-        pass
+        return self._input_shape
     
     @property
-    @abstractmethod
     def output_shape(self) -> Sy:
-        pass
+        return self._output_shape
 
     def exact_explainer(self, background: Array|None = None) -> ExactExplainer[Sy,Sx]:
         return cast(ExactExplainer, self.explainer(ExactExplainer, background))
@@ -142,24 +183,11 @@ class Network(Generic[Sx,Sy], ABC):
             
     @staticmethod
     def new(device: Device, input_shape: Sx) -> "Network[Sx,Sx]":
-        class EmptyNetwork(Network[Sx,Sx]):
-                @property
-                def modules(_) -> Tuple[Module,...]:
-                    return tuple()
-                        
-                @property
-                def device(_) -> Device:
-                    return get_device(device)
-    
-                @property
-                def input_shape(_) -> Sx:
-                    return input_shape
-                
-                @property
-                def output_shape(_) -> Sx:
-                    return input_shape
-
-        return EmptyNetwork()
+        return Network(
+            device=device,
+            input_shape=input_shape,
+            output_shape=input_shape,
+        )
             
     @staticmethod
     def dense(input_dim:          Sx,
@@ -214,15 +242,14 @@ class Network(Generic[Sx,Sy], ABC):
             
         shape = cast(Sz, tuple(new_shape))
 
-        class Reshape(torch.nn.Module):
-
-            def forward(self, tensor: Tensor) -> Tensor:
-                return tensor.reshape((-1,) + shape)
-            
-            def __repr__(self) -> str:
-                return f"{self.__class__.__name__}({shape})"
-
-        network = self._appended(Reshape(), shape)
+        network = self.appended(Network(
+            device=self.device,
+            input_shape=self.output_shape,
+            output_shape=shape,
+            logits=Sequential(Lambda(
+                f=lambda tensor: tensor.reshape((-1,) + shape),
+                repr=lambda _: f"Reshape({shape})"))
+        ))
         assert self._items == network._items, f"New rank: {network._items} differs from current rank: {self._items}"
         return network
     
@@ -231,7 +258,12 @@ class Network(Generic[Sx,Sy], ABC):
 
     def linear(self: "Network[Sx,Tuple[int]]", dim: int) -> "Network[Sx,Tuple[int]]":
         assert len(self.output_shape) == 1, f"Output dim must be flattened, but is: {self.output_shape}"
-        return self._appended(torch.nn.Linear(self.output_shape[0], dim, device=self.device), (dim,))
+        return self.appended(Network(
+            device=self.device,
+            input_shape=self.output_shape,
+            output_shape=(dim,),
+            logits=Sequential(torch.nn.Linear(self.output_shape[0], dim, device=self.device))
+            ))
 
     def relu(self) -> "Network[Sx,Sy]":
         return self.activation("ReLU")
@@ -240,12 +272,12 @@ class Network(Generic[Sx,Sy], ABC):
         return self.activation("Sigmoid")
     
     def activation(self, name: Activation) -> "Network[Sx,Sy]":
-        return self._appended(ActivationModule.get(name), self.output_shape)
-    
-    def parameters(self) -> Iterator[Parameter]:
-        for module in self.modules:
-            for param in module.parameters():
-                yield param
+        return self.appended(Network(
+            device=self.device,
+            input_shape=self.output_shape,
+            output_shape=self.output_shape,
+            logits=Sequential(ActivationModule.get(name))
+        ))
 
     def _to_tensor(self, array: Array) -> Tensor:
         if isinstance(array, ndarray):
@@ -253,7 +285,7 @@ class Network(Generic[Sx,Sy], ABC):
 
         return array.to(dtype=torch.float32, device=self.device)
         
-    def __call__(self, X: Array|Lazy[Array]|FeedForward[Ints,Sx]) -> FeedForward[Sx,Sy]:
+    def forward(self, X: Array|Lazy[Array]|FeedForward[Ints,Sx]) -> FeedForward[Sx,Sy]:
 
         def forward(tensor: Tensor) -> Tensor:
             tensor = tensor.requires_grad_(True)
@@ -283,98 +315,38 @@ class Network(Generic[Sx,Sy], ABC):
                 input=input,
                 output=input.map(forward)
             )
+        
+    def __call__(self, X: Array|Lazy[Array]|FeedForward[Ints,Sx]) -> FeedForward[Sx,Sy]:
+        return cast(FeedForward[Sx,Sy], super().__call__(X))
 
     def __add__(self, other: "Network[Sy,Sz]") -> "Network[Sx,Sz]":
+        return self.appended(other)
+    
+    def appended(self, other: "Network[Sy,Sz]") -> "Network[Sx,Sz]":
         if self.output_shape != other.input_shape:
             raise ValueError(f"Incompatible operand shape: {self.output_shape} != {other.input_shape}")
-        
-        return self._extended(other.modules, other.output_shape)
-    
-    def _extended(self, 
-                  logits:       Iterable[Callable[[Tensor],Tensor]], 
-                  new_shape:    Sz) -> "Network[Sx,Sz]":
-        
-        class Lambda(torch.nn.Module):
-
-            def __init__(self, f: Callable[[Tensor],Tensor]) -> None:
-                super().__init__()
-                self._f = f
-
-            def forward(self, x: Tensor) -> Tensor:
-                return self._f(x)
-            
-        def to_module(f: Callable[[Tensor],Tensor]) -> Module:
-            if isinstance(f, Module):
-                return f
-            else:
-                return Lambda(f)
-        
-        class SingleHeadedNetwork(Network[Sx,Sz]):
-            @property
-            def modules(_) -> Tuple[Module,...]:
-                return self.modules + Stream(logits).map(to_module).tuple()
-                    
-            @property
-            def device(_) -> Device:
-                return get_device(self.device)
-
-            @property
-            def input_shape(_) -> Sx:
-                return self.input_shape
-            
-            @property
-            def output_shape(_) -> Sz:
-                return new_shape
-
-        return SingleHeadedNetwork()
-    
-    def _appended(self,
-                  f:            Callable[[Tensor],Tensor],
-                  new_shape:   Sz) -> "Network[Sx,Sz]":
-        return self._extended((f,), new_shape)
+        return Network(
+            device=self.device,
+            input_shape=self.input_shape,
+            output_shape=other.output_shape,
+            logits=self.modules + other.modules
+        )
 
     def save(self, path: str) -> None:
-        with open(path, "w+b") as file:
-            dill.dump(self, file)
-
-    def __repr__(self) -> str:
-        return str(Sequential(*self.modules))
-    
-    @overload
-    @classmethod
-    def load(cls, 
-             path: str, 
-             *, 
-             input_shape: Sx, 
-             output_shape: Sy) -> Self: ...
-
-    @overload
-    @classmethod
-    def load(cls, 
-             path: str, 
-             *, 
-             input_shape: Sx) -> Self: ...
-
-    @overload
-    @classmethod
-    def load(cls, 
-             path: str, 
-             *, 
-             output_shape: Sy) -> Self: ...
-
-    @overload
-    @classmethod
-    def load(cls, 
-             path: str) -> Self: ...
+        return torch.save(self, path)
 
     @classmethod
     def load(cls, 
              path: str, 
              *, 
-             input_shape: Sx|None = None, 
-             output_shape: Sy|None = None) -> Self:
+             device:        Device|None = None,
+             input_shape:   Sx|None = None, 
+             output_shape:  Sy|None = None) -> Self:
         with open(path, "rb") as file:
-            network: Network = dill.load(file)
+            if device is None:
+                network: Network = torch.load(file)
+            else:
+                network = torch.load(file, map_location=get_device(device))
 
         if isinstance(network, cls):
             if input_shape and input_shape != network.input_shape:

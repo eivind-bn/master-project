@@ -82,7 +82,7 @@ class Explanation(Generic[C,F]):
     def compute_time(self) -> Seconds:
         return self._compute_time
 
-    def invert(self) -> "Explanation[F,C]":
+    def flip(self) -> "Explanation[F,C]":
         cls_axes = len(self.class_shape)
         old_feature_axes = tuple(range(cls_axes, cls_axes+len(self.feature_shape)))
         new_feature_axes = tuple(range(len(old_feature_axes)))
@@ -111,7 +111,7 @@ class Explanation(Generic[C,F]):
         self._assert_shape(other, feature_shape=self.feature_shape)
         A = self.flatten()
         B = other.flatten()
-        return (A @ B.invert()).reshape(
+        return (A @ B.flip()).reshape(
             class_shape=self.class_shape,
             feature_shape=other.class_shape
         )
@@ -140,7 +140,7 @@ class Explanation(Generic[C,F]):
         self._assert_shape(other, feature_shape=self.feature_shape)
         return self.conjunct(other.attribution_weights())
     
-    def esp(self, other: "Explanation[C2,F]") -> "Explanation[C,C2]":
+    def ecp(self, other: "Explanation[C2,F]") -> "Explanation[C,C2]":
         self._assert_shape(other, feature_shape=self.feature_shape)
         return self.conjunct(other.contribution_weights())
     
