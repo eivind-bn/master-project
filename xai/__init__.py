@@ -27,14 +27,14 @@ from .reward import Reward
 from .action import Action, Actions
 from .observation import Observation
 from .stream import Stream
-from .agent import Agent
 from .activation import ActivationName, ActivationSelector, Activation, ActivationType, ActivationModule
 from .loss import LossName, LossSelector, Loss, LossType, LossModule
 from .stats import Epoch, TrainHistory
 from .optimizer import Optimizer, SGD, Adam, RMSprop
 from .explanation import Explanation
 from .explainer import Explainer, Explainers, PermutationExplainer, ExactExplainer, KernelExplainer, DeepExplainer, GradientExplainer
-from .network import Network, FeedForward, Array
+from .network import Network, FeedForward, Array, Lambda
+from .agent import Agent
 from .autoencoder import AutoEncoder, AutoEncoderFeedForward
 from .angle_state import AngleStates
 from .events import MouseEventType, MouseEventFlag, MouseEvent, Events

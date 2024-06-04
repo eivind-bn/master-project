@@ -10,9 +10,10 @@ import random
 import numpy as np
 import copy
 
+Sx = Tuple[Literal[210], Literal[160], Literal[3]]
+Sy = Tuple[Literal[5]]
 
-
-class DQN(Agent):
+class DQN(Agent[Sx,Sy]):
     @dataclass
     class Step(Agent.Step):
         parent:     "DQN"
@@ -67,11 +68,24 @@ class DQN(Agent):
                 "action": np.array([self.action_id]),
                 "reward": np.array([self.reward_sum()]),
                 "next_state": self.next_state.numpy(force=True),
-                "done": np.array([self.done])
+                "done": np.array([self.done or self.observation.spaceship_crashed]),
             }
 
     def __init__(self, autoencoder_path: str, device: Device, translate: bool, rotate: bool) -> None:
-        super().__init__()
+        
+        autoencoder: AutoEncoder[Sx,Literal[32]] = AutoEncoder.load(autoencoder_path, device=device)
+        policy = Network.dense(input_dim=(4,32), output_dim=(5,), device=device)
+
+        super().__init__(
+            device=device,
+            input_shape=(4,) + autoencoder.input_shape,
+            output_shape=policy.output_shape,
+            logits=Lambda(
+                f=lambda tensor: policy(autoencoder(tensor)).output(),
+                repr=lambda _: f"Stacking()"
+                ),
+            )
+        
         self._translate = translate
         self._rotate = rotate
         self._actions = (
@@ -83,17 +97,9 @@ class DQN(Agent):
                 )
         self.rewards_per_episode: List[int] = []
         self.exploration_rate_per_episode: List[float] = []
-        
-        if device == "auto":
-            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self._device = torch.device(device)
 
-        X: TypeAlias = Tuple[Literal[210], Literal[160], Literal[3]]
-        L: TypeAlias = Tuple[Literal[32]]
-
-        self._autoencoder: AutoEncoder[X,L] = AutoEncoder.load(autoencoder_path)
-        self._policy = Network.dense(input_dim=(4*32,), output_dim=(5,), device=device)
+        self._autoencoder = autoencoder
+        self._policy = policy
     
     def rollout(self, 
                 exploration_rate: float|Callable[[],float], 
@@ -118,7 +124,7 @@ class DQN(Agent):
                 if self._rotate:
                     observation = observation.rotated()
 
-                embedding: Tensor = self._autoencoder.encoder(observation.tensor(normalize=True, device=self._device).unsqueeze(0)).output()
+                embedding: Tensor = self._autoencoder.encoder(observation.tensor(normalize=True, device=self.device).unsqueeze(0)).output()
                 embedding = embedding.squeeze(0)
 
                 return embedding
@@ -132,7 +138,7 @@ class DQN(Agent):
                 else:
                     env.reset()
 
-            state = torch.stack(tuple(latents)).reshape((1,-1))
+            state = torch.stack(tuple(latents)).reshape((4,32))
 
             skip_cnt = 0
             action_id = random.randrange(0, len(self._actions))
@@ -148,13 +154,13 @@ class DQN(Agent):
                             action = self._actions[action_id]
                         else:
                             q_values = self._policy(state)
-                            action_id = int(q_values().argmax(1).item())
+                            action_id = int(q_values().argmax(0).item())
                             action = self._actions[action_id]
 
                     observation,rewards = env.step(action)
                     latents.append(encode(observation))
 
-                    next_state = torch.stack(tuple(latents)).reshape((1,-1))
+                    next_state = torch.stack(tuple(latents)).reshape((4,32))
 
                     yield DQN.Step(
                         parent=self,
@@ -190,7 +196,7 @@ class DQN(Agent):
               final_exploration_rate_progress:  float = 0.75,
               verbose:                          bool = True,
               q_value_head_background_freq:     int = 25,
-              q_value_head_background_path:     str|None = None) -> None:
+              q_value_head_background_path:     str|None = None) -> None: # type: ignore
         
         exploration_rate = initial_exploration_rate
         
@@ -208,11 +214,11 @@ class DQN(Agent):
         replay_buffer = ArrayBuffer(
             capacity=replay_buffer_size,
             schema={
-                "state":        ((4*32), "float32"),
+                "state":        ((4,32), "float32"),
                 "action":       (1, "uint8"),
                 "reward":       (1, "float32"),
-                "next_state":   ((4*32), "float32"),
-                "done":         (1, "float32")
+                "next_state":   ((4,32), "float32"),
+                "done":         (1, "float32"),
             }
         )
 
@@ -239,7 +245,7 @@ class DQN(Agent):
                     if save_path is not None and episode % episode_save_freq == 0:
                         self.save(save_path)
 
-                total_reward += step.count_none_zero_rewards()
+                total_reward += step.reward_sum()
 
                 replay_buffer.append(step.numpy())
 
@@ -248,14 +254,17 @@ class DQN(Agent):
                         adam.zero_grad()
 
                         batch = replay_buffer.mini_batch(batch_size)
-                        state = torch.from_numpy(batch["state"]).to(dtype=torch.float32, device=self._device)
-                        action = torch.from_numpy(batch["action"]).to(dtype=torch.float32, device=self._device).long()
-                        reward = torch.from_numpy(batch["reward"]).to(dtype=torch.float32, device=self._device)
-                        next_state = torch.from_numpy(batch["next_state"]).to(dtype=torch.float32, device=self._device)
-                        done = torch.from_numpy(batch["done"]).to(dtype=torch.float32, device=self._device)
+                        state = torch.from_numpy(batch["state"]).to(dtype=torch.float32, device=self.device)
+                        action = torch.from_numpy(batch["action"]).to(dtype=torch.float32, device=self.device).long()
+                        reward = torch.from_numpy(batch["reward"]).to(dtype=torch.float32, device=self.device)
+                        next_state = torch.from_numpy(batch["next_state"]).to(dtype=torch.float32, device=self.device)
+                        done = torch.from_numpy(batch["done"]).to(dtype=torch.float32, device=self.device)
 
                         Q: Tensor = online_network(state).output()
                         Q = Q.gather(dim=1, index=action)
+                        
+                        reward = torch.where(reward > 0, 1, reward)
+                        reward = torch.where(done > 0, -1, reward)
 
                         with torch.no_grad():
                             Q_next: Tensor = target_policy(next_state).output()

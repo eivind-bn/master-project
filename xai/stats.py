@@ -38,6 +38,9 @@ class TrainHistory:
             zipped_values: Dict[str,List[Any]] = {}
             for epoch in milestone.epochs:
                 for field,value in epoch.items():
+                    if value is None:
+                        continue
+                    
                     zipped_values.setdefault(field, []).append(value)
 
             for field,values in zipped_values.items():

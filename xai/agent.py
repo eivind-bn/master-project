@@ -1,11 +1,15 @@
 from . import *
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from torch.nn import Module
 
-import dill # type: ignore
 import copy
 
-class Agent(ABC, Serializable["Agent"]):
+Ints: TypeAlias = Tuple[int,...]
+Sx = TypeVar("Sx", bound=Ints)
+Sy = TypeVar("Sy", bound=Ints)
+
+class Agent(Network[Sx,Sy]):
     @dataclass
     class Step(ABC):
         observation: Observation
@@ -13,8 +17,17 @@ class Agent(ABC, Serializable["Agent"]):
         rewards: Tuple[Reward,...]
         done:    bool
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, 
+                 device:        Device, 
+                 input_shape:   Sx, 
+                 output_shape:  Sy,
+                 logits:        Module|None = None) -> None:
+        super().__init__(
+            device=device,
+            input_shape=input_shape,
+            output_shape=output_shape,
+            logits=logits
+        )
         self.stats: Dict[str,Any] = {}
 
     @abstractmethod

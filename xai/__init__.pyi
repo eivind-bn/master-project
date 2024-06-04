@@ -19,7 +19,7 @@ from .lazy import Lazy as Lazy
 from .loss import Loss as Loss, LossModule as LossModule, LossName as LossName, LossSelector as LossSelector, LossType as LossType
 from .memory import Bytes as Bytes, ExaBytes as ExaBytes, ExbiBytes as ExbiBytes, GibiBytes as GibiBytes, GigaBytes as GigaBytes, KibiBytes as KibiBytes, KiloBytes as KiloBytes, MebiBytes as MebiBytes, MegaBytes as MegaBytes, Memory as Memory, PebiBytes as PebiBytes, PetaBytes as PetaBytes, TebiBytes as TebiBytes, TeraBytes as TeraBytes, YobiBytes as YobiBytes, ZebiBytes as ZebiBytes
 from .mnist import MNIST as MNIST
-from .network import Array as Array, FeedForward as FeedForward, Network as Network
+from .network import Array as Array, FeedForward as FeedForward, Network as Network, Lambda as Lambda
 from .objref import Dump as Dump, File as File, Load as Load, ObjRef as ObjRef
 from .observation import Observation as Observation
 from .optimizer import Adam as Adam, Optimizer as Optimizer, RMSprop as RMSprop, SGD as SGD

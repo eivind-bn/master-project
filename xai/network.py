@@ -103,9 +103,8 @@ class Network(Generic[Sx,Sy], Module):
             self._logits = Sequential(logits)
 
         self._device = get_device(device)
-
         self._logits = self._logits.to(device=self._device)
-
+        
         self._input_shape = input_shape
         self._output_shape = output_shape
 
@@ -125,6 +124,10 @@ class Network(Generic[Sx,Sy], Module):
             
     @property
     def device(self) -> device:
+        for param in self.parameters():
+            self._device = param.device
+            return self._device
+        
         return self._device
 
     @property

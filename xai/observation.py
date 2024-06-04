@@ -9,6 +9,7 @@ import torch
 
 _PLAYER_COLOR = (240,128,128)
 _Y_START, _Y_END = 18, 195
+_MAX_DISPLACEMENT = ((210/2)**2 + (160/2)**2)**(1/2)
 
 _CMAP: TypeAlias = Literal[
             "viridis", "plasma", "inferno", "magma", "cividis",
@@ -32,11 +33,14 @@ class Observation:
     def __init__(self,
                  spaceship:         NDArray[np.uint8],
                  asteroids:         NDArray[np.uint8],
+                 spaceship_crashed: bool,
                  spaceship_angle:   Angle|None = None) -> None:
         self.spaceship = spaceship
         self.asteroids = asteroids
-        self.rendering: NDArray[np.uint8]|None = None
-        self.normalized_rendering: NDArray[np.float32]|None = None
+        self.spaceship_crashed = spaceship_crashed
+        self.rendering:             NDArray[np.uint8]|None = None
+        self.normalized_rendering:  NDArray[np.float32]|None = None
+        self.spaceship_position:    Tuple[int,int]|None = None
         self.spaceship_angle = spaceship_angle
 
     @overload
@@ -95,6 +99,7 @@ class Observation:
         return Observation(
             spaceship=spaceship_copy,
             asteroids=asteroids_copy,
+            spaceship_crashed=self.spaceship_crashed,
             spaceship_angle=self.spaceship_angle
         )
 
@@ -146,8 +151,17 @@ class Observation:
         else:
             return Observation(
                 spaceship=rotate_layer(self.spaceship, angle=self.spaceship_angle),
-                asteroids=rotate_layer(self.asteroids, angle=self.spaceship_angle)
+                asteroids=rotate_layer(self.asteroids, angle=self.spaceship_angle),
+                spaceship_crashed=self.spaceship_crashed
             )
+        
+    def displacement(self) -> Tuple[int,int]:
+        spaceship_view = self.spaceship[_Y_START:_Y_END]
+        sy,sx = spaceship_view.shape[0]//2, spaceship_view.shape[1]//2
+        pos = self.find_player()
+        if pos is not None:
+            return ((pos[0]-sy)**2 + (pos[1]-sx)**2)**(1/2)/_MAX_DISPLACEMENT
+        return 0.0
     
     def show(self, cmap: _CMAP|None = None) -> None:
         plt.imshow(self.numpy(normalize=False), cmap=cmap)
@@ -157,6 +171,9 @@ class Observation:
         im.imsave(fname=filename, arr=self.numpy(normalize=False), cmap=cmap)
 
     def find_player(self, color: Tuple[int,int,int]|None = None) -> Tuple[int,int]|None:
+        if self.spaceship_position is not None:
+            return self.spaceship_position
+        
         if color is None:
             color = _PLAYER_COLOR
 

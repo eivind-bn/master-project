@@ -22,6 +22,7 @@ class Asteroids:
              steps:         int = 1) -> Tuple[Observation, Tuple[Reward,...]]:
         
         rewards: List[Reward] = []
+        lives: List[int] = []
 
         for _ in range(steps):
             if stochastic:
@@ -31,16 +32,25 @@ class Asteroids:
                     _, reward = self._step_asteroids(Actions.NOOP)
 
                 rewards.append(Reward(reward))
+                lives.append(self.lives())
 
             self.spaceship, reward = self._step_spaceship(action)
             rewards.append(Reward(reward))
+            lives.append(self.lives())
 
             self.asteroids, reward = self._step_asteroids(action)
             rewards.append(Reward(reward))
+            lives.append(self.lives())
+
+        if lives:
+            spaceship_crashed = all(life == lives[0] for life in lives)
+        else:
+            spaceship_crashed = False
 
         self.observation = Observation(
             spaceship=self.spaceship,
             asteroids=self.asteroids,
+            spaceship_crashed=spaceship_crashed,
             spaceship_angle=self.spaceship_angle()
             )
         
