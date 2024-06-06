@@ -12,6 +12,14 @@ import copy
 
 Sx = Tuple[Literal[210], Literal[160], Literal[3]]
 Sy = Tuple[Literal[5]]
+Sz = Tuple[Literal[32]]
+
+class Explanations(NamedTuple):
+    latent_explanation:     Explanation[Sz,Sx]
+    policy_explanation:     Explanation[Sy,Sz]
+    eap_explanation:        Explanation[Sy,Sx]
+    ecp_explanation:        Explanation[Sy,Sx]
+
 
 class DQN(Agent[Sx,Sy]):
     @dataclass
@@ -22,38 +30,33 @@ class DQN(Agent[Sx,Sy]):
         action_id:  int
 
         def explain_latents(self, algorithm: Explainer|Explainers, background: Array|None = None) -> Explanation:
-            return self.parent._autoencoder.decoder(self.next_state[0,-32:]).explain(algorithm, background)
+            return self.parent._autoencoder.decoder(self.next_state[-1]).explain(algorithm, background)
         
-        def explain_eap(self, 
-                        algorithm: Explainer|Explainers, 
-                        decoder_background: Array|None = None,
-                        q_background: Array|None = None) -> Explanation:
-            l_explanation = self.explain_latents(algorithm, decoder_background).flatten()
-            q_explanation = self.parent._policy(self.next_state).explain(algorithm, q_background).flatten()
-            weights = l_explanation.attribution_weights().shap_values
-            shap_values = q_explanation.shap_values.reshape((5,4,32)).sum(1)@weights.T
-            shap_values = shap_values.reshape((5,210,160,3)).sum(3)
-            return Explanation(
-                class_shape=(5,),
-                feature_shape=(210,160),
-                shap_values=shap_values,
-                compute_time=l_explanation.compute_time + q_explanation.compute_time
-            )
-        
-        def explain_esp(self, 
-                        algorithm: Explainer|Explainers, 
-                        decoder_background: Array|None = None,
-                        q_background: Array|None = None) -> Explanation:
-            l_explanation = self.explain_latents(algorithm, decoder_background).flatten()
-            q_explanation = self.parent._policy(self.next_state).explain(algorithm, q_background).flatten()
-            weights = l_explanation.contribution_weights().shap_values
-            shap_values = q_explanation.shap_values.reshape((5,4,32)).sum(1)@weights.T
-            shap_values = shap_values.reshape((5,210,160,3)).sum(3)
-            return Explanation(
-                class_shape=(5,),
-                feature_shape=(210,160),
-                shap_values=shap_values,
-                compute_time=l_explanation.compute_time + q_explanation.compute_time
+        def explain(self, 
+                    algorithm:          Explainer|Explainers, 
+                    decoder_background: Array|None = None,
+                    q_background:       Array|None = None) -> Explanations:
+            l_explanation = self.explain_latents(algorithm, decoder_background)
+            q_explanation = self.parent._policy(self.next_state).explain(algorithm, q_background)
+
+            q_shap_values = q_explanation.flatten().shap_values.reshape((5,4,32)).sum(1)
+            attribution_weights = l_explanation.flatten().attribution_weights().shap_values.T
+            contribution_weights = l_explanation.flatten().contribution_weights().shap_values.T
+            return Explanations(
+                latent_explanation=l_explanation,
+                policy_explanation=q_explanation,
+                eap_explanation=Explanation(
+                    class_shape=(5,),
+                    feature_shape=(210,160),
+                    shap_values=(q_shap_values@attribution_weights).reshape((5,210,160,3)).sum(3),
+                    compute_time=l_explanation.compute_time + q_explanation.compute_time
+                    ),
+                ecp_explanation=Explanation(
+                    class_shape=(5,),
+                    feature_shape=(210,160),
+                    shap_values=(q_shap_values@contribution_weights).reshape((5,210,160,3)).sum(3),
+                    compute_time=l_explanation.compute_time + q_explanation.compute_time
+                )
             )
 
         def reward_sum(self) -> int:
