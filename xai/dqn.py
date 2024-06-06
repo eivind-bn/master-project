@@ -183,6 +183,7 @@ class DQN(Agent[Sx,Sy]):
     def train(self, 
               total_time_steps:                 int,
               replay_buffer_size:               int|Memory,
+              max_episodes:                     int|None = None,
               learning_rate:                    float = 1e-4,
               learning_starts:                  int = 3_000,
               batch_size:                       int = 32,
@@ -247,6 +248,10 @@ class DQN(Agent[Sx,Sy]):
                     episode += 1
                     if save_path is not None and episode % episode_save_freq == 0:
                         self.save(save_path)
+
+                    if max_episodes is not None and episode >= max_episodes:
+                        self.save(save_path)
+                        return
 
                 total_reward += step.reward_sum()
 
