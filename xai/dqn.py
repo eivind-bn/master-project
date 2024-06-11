@@ -39,7 +39,7 @@ class DQN(Agent[Sx,Sy]):
             l_explanation = self.explain_latents(algorithm, decoder_background)
             q_explanation = self.parent._policy(self.next_state).explain(algorithm, q_background)
 
-            q_shap_values = q_explanation.flatten().shap_values.reshape((5,4,32)).sum(1)
+            q_shap_values = q_explanation.shap_values.reshape((5,4,32)).sum(1)
             attribution_weights = l_explanation.flatten().attribution_weights().shap_values.T
             contribution_weights = l_explanation.flatten().contribution_weights().shap_values.T
             return Explanations(

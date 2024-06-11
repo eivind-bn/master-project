@@ -73,8 +73,8 @@ def generate_video():
 
                 explanations = step.explain(
                     algorithm="permutation",
-                    decoder_background=obs_background[:background_size],
-                    q_background=state_background[:background_size]
+                    decoder_background=obs_background[torch.randperm(len(obs_background))[:background_size]],
+                    q_background=state_background[torch.randperm(len(state_background))[:background_size]]
                 )
 
                 eap_shap_values = explanations.eap_explanation.shap_values

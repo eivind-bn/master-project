@@ -103,7 +103,7 @@ class Observation:
             spaceship_angle=self.spaceship_angle
         )
 
-    def rotated(self) -> "Observation":
+    def rotated(self, angle: Angle|None = None) -> "Observation":
         # TODO: fix rendering issue when called twice
 
         def rotate_layer(layer: NDArray[np.uint8], angle: Angle) -> NDArray[np.uint8]:
@@ -146,14 +146,17 @@ class Observation:
                 
             return layer_copy
         
-        if self.spaceship_angle is None:
-            return self
-        else:
-            return Observation(
-                spaceship=rotate_layer(self.spaceship, angle=self.spaceship_angle),
-                asteroids=rotate_layer(self.asteroids, angle=self.spaceship_angle),
-                spaceship_crashed=self.spaceship_crashed
-            )
+        if angle is None:
+            if self.spaceship_angle is None:
+                return self
+            else:
+                angle = self.spaceship_angle
+        
+        return Observation(
+            spaceship=rotate_layer(self.spaceship, angle=angle),
+            asteroids=rotate_layer(self.asteroids, angle=angle),
+            spaceship_crashed=self.spaceship_crashed
+        )
         
     def displacement(self) -> Tuple[int,int]:
         spaceship_view = self.spaceship[_Y_START:_Y_END]

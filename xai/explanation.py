@@ -69,10 +69,26 @@ class Explanation(Generic[C,F]):
     @property
     def class_shape(self) -> C:
         return self._class_shape
+    
+    @property
+    def class_items(self) -> int:
+        return math.prod(self.class_shape)
 
     @property
     def feature_shape(self) -> F:
         return self._feature_shape
+    
+    @property
+    def feature_items(self) -> int:
+        return math.prod(self.feature_shape)
+    
+    @property
+    def shape(self) -> Ints:
+        return self.class_shape + self.feature_shape
+    
+    @property
+    def items(self) -> int:
+        return self.class_items + self.feature_items
 
     @property
     def shap_values(self) -> NDArray[float64]:
@@ -83,13 +99,11 @@ class Explanation(Generic[C,F]):
         return self._compute_time
 
     def flip(self) -> "Explanation[F,C]":
-        cls_axes = len(self.class_shape)
-        old_feature_axes = tuple(range(cls_axes, cls_axes+len(self.feature_shape)))
-        new_feature_axes = tuple(range(len(old_feature_axes)))
+        flat_flipped = self.flatten().shap_values.T
         return self._compute(
             class_shape=self.feature_shape,
             feature_shape=self.class_shape,
-            shap_values=np.moveaxis(self.shap_values, old_feature_axes, new_feature_axes),
+            shap_values=flat_flipped.reshape(self.feature_shape + self.class_shape),
         )
     
     def reshape(self, 
@@ -107,13 +121,26 @@ class Explanation(Generic[C,F]):
             feature_shape=(math.prod(self.feature_shape),)
         )
 
-    def conjunct(self, other: "Explanation[C2,F]") -> "Explanation[C,C2]":
-        self._assert_shape(other, feature_shape=self.feature_shape)
+    # def conjunct(self, other: "Explanation[C2,F]") -> "Explanation[C,C2]":
+    #     self._assert_shape(other, feature_shape=self.feature_shape)
+    #     A = self.flatten()
+    #     B = other.flatten()
+    #     return (A @ B.flip()).reshape(
+    #         class_shape=self.class_shape,
+    #         feature_shape=other.class_shape
+    #     )
+
+    def conjunct(self, other: "Explanation[C2,F2]") -> "Explanation[C2,F]":
         A = self.flatten()
         B = other.flatten()
-        return (A @ B.flip()).reshape(
-            class_shape=self.class_shape,
-            feature_shape=other.class_shape
+        C = np.outer(B.shap_values, A.shap_values)\
+            .reshape(B.shape + A.shape)\
+            .sum((1,2))
+        return Explanation(
+            class_shape=other.class_shape,
+            feature_shape=self.feature_shape,
+            compute_time=self.compute_time + other.compute_time,
+            shap_values=np.reshape(C, other.class_shape + self.feature_shape)
         )
     
     def attribution_weights(self) -> "Explanation[C,F]":
@@ -123,7 +150,7 @@ class Explanation(Generic[C,F]):
             class_shape=self.class_shape,
             feature_shape=self.feature_shape,
             compute_time=self.compute_time,
-            shap_values= weights.reshape(self.class_shape + self.feature_shape)
+            shap_values=weights.reshape(self.class_shape + self.feature_shape)
         )
     
     def contribution_weights(self) -> "Explanation[C,F]":
@@ -133,16 +160,14 @@ class Explanation(Generic[C,F]):
             class_shape=self.class_shape,
             feature_shape=self.feature_shape,
             compute_time=self.compute_time,
-            shap_values= weights.reshape(self.class_shape + self.feature_shape)
+            shap_values=weights.reshape(self.class_shape + self.feature_shape)
         )
     
-    def eap(self, other: "Explanation[C2,F]") -> "Explanation[C,C2]":
-        self._assert_shape(other, feature_shape=self.feature_shape)
-        return self.conjunct(other.attribution_weights())
+    def eap(self, expander: "Explanation[C2,F2]") -> "Explanation[C,C2]":
+        return expander.attribution_weights().flip().conjunct(self)
     
-    def ecp(self, other: "Explanation[C2,F]") -> "Explanation[C,C2]":
-        self._assert_shape(other, feature_shape=self.feature_shape)
-        return self.conjunct(other.contribution_weights())
+    def ecp(self, expander: "Explanation[C2,F2]") -> "Explanation[C,C2]":
+        return expander.contribution_weights().flip().conjunct(self)
     
     def max(self) -> float:
         return float(self.shap_values.max())
