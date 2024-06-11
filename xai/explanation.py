@@ -133,9 +133,7 @@ class Explanation(Generic[C,F]):
     def conjunct(self, other: "Explanation[C2,F2]") -> "Explanation[C2,F]":
         A = self.flatten()
         B = other.flatten()
-        C = np.outer(B.shap_values, A.shap_values)\
-            .reshape(B.shape + A.shape)\
-            .sum((1,2))
+        C = np.einsum("ab,cd->ad", B.shap_values, A.shap_values)
         return Explanation(
             class_shape=other.class_shape,
             feature_shape=self.feature_shape,

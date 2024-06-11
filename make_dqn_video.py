@@ -8,14 +8,14 @@ import cv2
 
 def generate_video():
 
-    device = "cpu"
+    device = "cuda"
     org = (10,4*207)
     fontscale = 4
     thickness = 3
     exploration_rate = 0.0
     frame_skips = 4
     number_of_frames = 3000
-    background_size = 50
+    background_size = 5
 
     try:
         dqn = DQN.load("dqn-model.pt", device=device)
