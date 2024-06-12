@@ -5,29 +5,25 @@ from collections import deque
 import matplotlib.pyplot as plt
 import gc
 import cv2
+import argparse
 
-def generate_video():
+def generate_video(
+        dqn_model_path: str,
+        device = "cpu",
+        org = (10,4*207),
+        fontscale = 4,
+        thickness = 3,
+        exploration_rate = 0.0,
+        frame_skips = 4,
+        number_of_frames = 3000,
+        background_size = 50):
 
-    device = "cpu"
-    org = (10,4*207)
-    fontscale = 4
-    thickness = 3
-    exploration_rate = 0.0
-    frame_skips = 4
-    number_of_frames = 3000
-    background_size = 50
-
-    try:
-        dqn = DQN.load("dqn-model.pt", device=device)
-    except FileNotFoundError:
-        print("Creating new agent...")
-        dqn = DQN(autoencoder_path="asteroids-autoencoder-l32.pt", translate=True, rotate=True, device=device) 
-
+    dqn = DQN.load(dqn_model_path, device=device)
 
     with Recorder("dqn-agent.mp4", scale=1, fps=24) as recorder:
         with Window("Asteroids", 24, 1) as window:
-            obs_background = dqn._autoencoder.encoder(torch.load("observations.pt")).output()
-            state_background = torch.from_numpy(np.load("states.npy"))
+            obs_background = dqn._autoencoder.encoder(torch.load("git-ignore/observations.pt")).output()
+            state_background = torch.from_numpy(np.load("git-ignore/states.npy"))
 
             for step in dqn.rollout(exploration_rate, frame_skips=frame_skips).take(number_of_frames).monitor("Frame:", expected_length=number_of_frames):
                 gc.collect()
@@ -199,4 +195,9 @@ def generate_video():
 
 
 if __name__ == "__main__":
-    generate_video()
+    parser = argparse.ArgumentParser(description="sample argument parser")
+    parser.add_argument("dqn_path")
+    args = parser.parse_args()
+    generate_video(
+        dqn_model_path=args.dqn_path
+    )

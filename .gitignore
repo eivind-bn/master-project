@@ -171,3 +171,4 @@ images
 asteroids-autoencoder-l32
 asteroids-autoencoder-l32-bad
 dqn-model.pt
+git-ignore/
